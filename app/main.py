@@ -1,0 +1,157 @@
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from contextlib import asynccontextmanager
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy import text
+from app.db.session import engine, Base
+from app.api.auth import router as auth_router
+from app.api.requirements import router as req_router
+from app.modules.vacancy.router import router as vacancy_router
+from app.modules.advertisement.router import router as ad_router
+from app.modules.candidate.router import router as candidate_router
+from app.modules.application.router import router as app_router
+from app.modules.selection.router import router as selection_router
+from app.modules.scoring_weights.router import router as weight_router
+from app.modules.appointment.router import router as appointment_router
+from app.modules.attendance.router import router as attendance_router
+from app.modules.billing.router import router as billing_router
+from app.modules.payments.router import router as payments_router
+from app.modules.audit.router import router as audit_router
+from app.modules.helpdesk.router import router as helpdesk_router
+from app.core.config import settings
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create tables (For dev/Step 1. In prod use Alembic)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+        # Backward-compatible hotfix for environments where latest Alembic migration
+        # has not been applied yet.
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number VARCHAR(20)")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
+        )
+        await conn.execute(
+            text("ALTER TABLE users ADD COLUMN IF NOT EXISTS force_password_change BOOLEAN DEFAULT FALSE")
+        )
+        # Hotfix for Norms table updates
+        await conn.execute(text("ALTER TABLE norms ADD COLUMN IF NOT EXISTS institution_id INTEGER"))
+        await conn.execute(text("ALTER TABLE norms ADD COLUMN IF NOT EXISTS academic_year VARCHAR"))
+        await conn.execute(text("ALTER TABLE norms ADD COLUMN IF NOT EXISTS course_id INTEGER"))
+        await conn.execute(text("ALTER TABLE norms DROP COLUMN IF EXISTS level"))
+        await conn.execute(text("ALTER TABLE norms DROP COLUMN IF EXISTS ratio"))
+        await conn.execute(text("ALTER TABLE norms ADD COLUMN IF NOT EXISTS faculty_student_ratio FLOAT"))
+        await conn.execute(text("ALTER TABLE norms ADD COLUMN IF NOT EXISTS min_qualification VARCHAR"))
+        await conn.execute(text("ALTER TABLE norms ADD COLUMN IF NOT EXISTS norm_type VARCHAR"))
+        await conn.execute(text("ALTER TABLE norms ADD COLUMN IF NOT EXISTS course_category VARCHAR"))
+        await conn.execute(text("ALTER TABLE norms ADD COLUMN IF NOT EXISTS grade_requirement VARCHAR"))
+        await conn.execute(text("ALTER TABLE norms ADD COLUMN IF NOT EXISTS max_age INTEGER DEFAULT 38"))
+        await conn.execute(text("ALTER TABLE norms ADD COLUMN IF NOT EXISTS workload_hours_per_week INTEGER DEFAULT 18"))
+        await conn.execute(text("ALTER TABLE norms DROP COLUMN IF EXISTS practical_to_theory_ratio"))
+        await conn.execute(text("ALTER TABLE existing_faculty ADD COLUMN IF NOT EXISTS date_of_birth DATE"))
+        
+        # (Data migration scripts for deprecated columns removed)
+        # Hotfix for Candidate registration
+        await conn.execute(text("ALTER TABLE candidates ALTER COLUMN date_of_birth DROP NOT NULL"))
+    yield
+
+
+
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(
+    title="CHB Portal Backend",
+    description="Backend API for the Clock Hour Basis (CHB) Portal",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+cors_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
+if "*" in cors_origins:
+    cors_origins = [o for o in cors_origins if o != "*"]
+
+# CORS Configuration
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins or ["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global Exception Handlers
+@app.exception_handler(IntegrityError)
+async def integrity_exception_handler(request: Request, exc: IntegrityError):
+    """
+    Catch SQLAlchemy IntegrityErrors (Unique constraints, etc.)
+    """
+    error_msg = str(exc.orig)
+    detail = "Database integrity violation"
+    
+    if "unique constraint" in error_msg.lower():
+        detail = "Duplicate entry detected. This record already exists."
+    elif "foreign key constraint" in error_msg.lower():
+        detail = "Referential integrity error: Related record not found."
+        
+    return JSONResponse(
+        status_code=400,
+        content={"status": "error", "code": "INTEGRITY_ERROR", "message": detail},
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    """
+    Normalize HTTPException payloads to the standard API error envelope.
+    """
+    code = "HTTP_ERROR"
+    message = "Request failed"
+
+    if isinstance(exc.detail, dict):
+        code = exc.detail.get("code", code)
+        message = exc.detail.get("message", message)
+    elif isinstance(exc.detail, str):
+        message = exc.detail
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"status": "error", "code": code, "message": message},
+    )
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    """
+    Catch all unexpected errors and hide internal details from the user.
+    """
+    # In a real production app, you would log 'exc' to a service like Sentry or CloudWatch here.
+    print(f"CRITICAL ERROR: {str(exc)}") 
+    
+    return JSONResponse(
+        status_code=500,
+        content={
+            "status": "error",
+            "code": "INTERNAL_SERVER_ERROR",
+            "message": "An unexpected internal error occurred. Please contact support.",
+        },
+    )
+
+app.include_router(auth_router, prefix="/api")
+app.include_router(req_router, prefix="/api")
+app.include_router(vacancy_router, prefix="/api")
+app.include_router(ad_router, prefix="/api")
+app.include_router(candidate_router, prefix="/api")
+app.include_router(app_router, prefix="/api")
+app.include_router(selection_router, prefix="/api")
+app.include_router(weight_router, prefix="/api")
+app.include_router(appointment_router, prefix="/api")
+app.include_router(attendance_router, prefix="/api")
+app.include_router(billing_router, prefix="/api")
+app.include_router(payments_router, prefix="/api")
+app.include_router(audit_router, prefix="/api")
+app.include_router(helpdesk_router, prefix="/api")
+
+@app.get("/")
+async def read_root():
+    return {"message": "Welcome to the CHB Portal API"}

@@ -1,0 +1,115 @@
+﻿CHB Portal API Reference (Step 3 & Step 4)
+
+Step 3: Advertisement APIs
+Base Path: /api/advertisements
+
+| Method | Endpoint                           | Role              | Purpose |
+|--------|------------------------------------|-------------------|---------|
+| POST   | /generate                          | PRINCIPAL         | Generate template advertisement from confirmed vacancy assessment |
+| GET    | /meta                              | ADMIN, PRINCIPAL  | Fetch metadata for ad generation form |
+| POST   | /generate-ai                       | PRINCIPAL         | Generate bilingual AI-assisted advertisement content |
+| GET    | /published                         | Public            | List published advertisements |
+| GET    | /{advertisement_id}                | ADMIN, PRINCIPAL  | Get advertisement details |
+| PUT    | /{advertisement_id}                | PRINCIPAL         | Update editable advertisement fields |
+| POST   | /{advertisement_id}/submit         | PRINCIPAL         | Submit ad for admin review |
+| POST   | /{advertisement_id}/approve        | ADMIN             | Approve or reject ad |
+| POST   | /{advertisement_id}/publish        | ADMIN             | Publish approved ad |
+| GET    | /public/{public_token}             | Public            | Public view of published ad |
+
+Request Samples
+
+1) POST /api/advertisements/generate
+{
+  "assessment_id": "00000000-0000-0000-0000-000000000000",
+  "application_start_date": "2026-06-01",
+  "application_end_date": "2026-06-30",
+  "qualification_requirements": "As per AICTE/DTE norms",
+  "required_documents": "Degree Certificates, Mark Sheets, ID Proof",
+  "important_instructions": "Original documents required at interview",
+  "interview_venue": "Institution Campus"
+}
+
+2) POST /api/advertisements/generate-ai
+{
+  "institution_id": 1,
+  "course_id": 10,
+  "vacancy_count": 4,
+  "deadline": "2026-06-30",
+  "application_mode": "Walk-in"
+}
+
+3) PUT /api/advertisements/{advertisement_id}
+{
+  "content_en": "Updated English ad content",
+  "content_mr": "Updated Marathi ad content",
+  "application_start_date": "2026-06-01",
+  "application_end_date": "2026-06-30",
+  "qualification_requirements": "As per norms",
+  "required_documents": "Degree, Marksheet, ID",
+  "important_instructions": "Bring originals",
+  "interview_venue": "Main Building"
+}
+
+4) POST /api/advertisements/{advertisement_id}/approve
+{
+  "action": "APPROVE",
+  "remarks": "Looks good"
+}
+
+or
+
+{
+  "action": "REJECT",
+  "remarks": "Please fix eligibility section"
+}
+
+Step 4: Application APIs
+Base Path: /api
+
+| Method | Endpoint                                      | Role                 | Purpose |
+|--------|-----------------------------------------------|----------------------|---------|
+| POST   | /applications                                 | CANDIDATE            | Create application draft |
+| POST   | /applications/{application_id}/documents      | CANDIDATE            | Upload document (AI scrutiny queued) |
+| POST   | /applications/{application_id}/analyze-ai     | PRINCIPAL, ADMIN     | Trigger on-demand AI scrutiny |
+| GET    | /applications/{application_id}/ai-summary     | PRINCIPAL, ADMIN     | Get AI scrutiny summary |
+| GET    | /applications/{application_id}/documents      | CANDIDATE, PRINCIPAL | List uploaded documents |
+| POST   | /applications/{application_id}/submit         | CANDIDATE            | Submit application |
+| DELETE | /applications/{application_id}/withdraw       | CANDIDATE            | Withdraw application |
+| GET    | /applications/my                              | CANDIDATE            | List candidate applications |
+| GET    | /applications                                 | PRINCIPAL, ADMIN     | List applications with filters |
+
+Request Samples
+
+1) POST /api/applications
+{
+  "advertisement_id": "00000000-0000-0000-0000-000000000000",
+  "applied_designation": "Clock Hour Basis Lecturer"
+}
+
+2) POST /api/applications/{application_id}/documents
+multipart/form-data:
+- document_type: PHOTO | SIGNATURE | AADHAR | PAN | DEGREE_CERTIFICATE | MARKSHEET | EXPERIENCE_LETTER | CASTE_CERTIFICATE | NOC | PUBLICATION_PROOF | OTHER
+- file: binary (pdf/jpeg/png/tiff)
+
+3) POST /api/applications/{application_id}/analyze-ai
+No body required.
+
+4) POST /api/applications/{application_id}/submit
+{
+  "declaration_accepted": true
+}
+
+Common Query Params
+
+Step 3
+GET /api/advertisements/published?institution_id=1&course_id=10&academic_year=2026-2027
+
+Step 4
+GET /api/applications?advertisement_id=<UUID>&status=SUBMITTED&course_id=10&academic_year=2026-2027
+
+Important Frontend Notes
+- Use real UUIDs for application_id and advertisement_id path params.
+- Step 4 upload returns immediate success and queues AI in background; poll GET /applications/{id}/ai-summary.
+- Step 3 approval requires remarks when rejecting.
+- Candidate: apply/upload/submit/withdraw/my applications.
+- Principal/Admin: AI summary/analyze, application listing, advertisement workflows.
