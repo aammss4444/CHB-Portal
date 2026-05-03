@@ -1,0 +1,96 @@
+import json
+import re
+from typing import Any
+
+from app.services.ocr_service import extract_text
+from app.services.openai_client import analyze_documents, openai_ready
+
+
+def _mask_sensitive(text: str) -> str:
+    if not text:
+        return text
+    # Mask Aadhaar-like numbers
+    return re.sub(r"\b\d{4}[- ]?\d{4}[- ]?\d{4}\b", "XXXX-XXXX-XXXX", text)
+
+
+class DocumentAIEngine:
+    @staticmethod
+    def _normalized_result(result: dict[str, Any]) -> dict[str, Any]:
+        normalized = {
+            "document_analysis": result.get("document_analysis", []),
+            "missing_documents": result.get("missing_documents", []),
+            "mismatches": result.get("mismatches", []),
+            "scrutiny_summary": result.get("scrutiny_summary", ""),
+            "status": result.get("status", "REQUIRES_REVIEW"),
+            "confidence_score": result.get("confidence_score", 0.5),
+        }
+        if normalized["status"] not in {"COMPLETE", "INCOMPLETE", "REQUIRES_REVIEW"}:
+            normalized["status"] = "REQUIRES_REVIEW"
+        try:
+            normalized["confidence_score"] = float(normalized["confidence_score"])
+        except Exception:
+            normalized["confidence_score"] = 0.5
+        normalized["confidence_score"] = max(0.0, min(1.0, normalized["confidence_score"]))
+        return normalized
+
+    async def analyze(self, documents, profile: dict[str, Any]) -> dict[str, Any]:
+        extracted_docs: list[dict[str, Any]] = []
+        for doc in documents:
+            file_path = getattr(doc, "file_path", None) or doc.get("file_path") or doc.get("path")
+            doc_type = getattr(doc, "document_type", None) or doc.get("document_type") or doc.get("type")
+            text = await extract_text(file_path)
+            text = _mask_sensitive(text)
+            extracted_docs.append({"type": doc_type, "text": text[:3000]})
+
+        prompt = f"""
+Candidate Profile:
+Name: {profile.get('name')}
+Qualifications: {profile.get('qualifications')}
+Experience: {profile.get('experience')}
+
+Documents:
+{json.dumps(extracted_docs, ensure_ascii=False)}
+
+Tasks:
+1. Extract key info (degree, year, university)
+2. Compare with profile
+3. Detect missing required documents
+4. Detect mismatches
+5. Generate scrutiny summary
+6. Classify application
+
+Return JSON:
+{{
+  "document_analysis": [
+    {{
+      "document_type": "...",
+      "extracted_fields": {{
+        "degree": "...",
+        "year": "...",
+        "university": "..."
+      }},
+      "issues": []
+    }}
+  ],
+  "missing_documents": [],
+  "mismatches": [],
+  "scrutiny_summary": "",
+  "status": "COMPLETE | INCOMPLETE | REQUIRES_REVIEW",
+  "confidence_score": 0.0
+}}
+"""
+        try:
+            if not openai_ready():
+                raise RuntimeError("OPENAI_UNAVAILABLE")
+            raw = await analyze_documents(prompt)
+            result = self._normalized_result(json.loads(raw))
+        except Exception:
+            result = self._normalized_result({
+                "document_analysis": [],
+                "missing_documents": [],
+                "mismatches": [],
+                "status": "REQUIRES_REVIEW",
+                "scrutiny_summary": "AI parsing failed or unavailable; manual scrutiny required.",
+                "confidence_score": 0.5,
+            })
+        return result
