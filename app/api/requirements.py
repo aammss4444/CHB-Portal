@@ -907,10 +907,10 @@ async def generate_requirements(gen_req: GenerateRequirementRequest, db: AsyncSe
             legacy_cat = derive_course_category(course.name, course.level)
             if legacy_cat:
                 _legacy_map = {
-                    "Engineering Diploma": CourseCategory.ENGINEERING_DIPLOMA,
-                    "Engineering Degree": CourseCategory.ENGINEERING_DEGREE,
-                    "HMCT": CourseCategory.HMCT,
-                    "Applied Sciences": CourseCategory.APPLIED_SCIENCES,
+                    "Engineering & Technology (Diploma)": CourseCategory.ENGINEERING_DIPLOMA,
+                    "Engineering (Degree - B.E./B.Tech)": CourseCategory.ENGINEERING_DEGREE,
+                    "HMCT (Hotel Management)": CourseCategory.HMCT,
+                    "Non-Engineering (Applied Sciences)": CourseCategory.APPLIED_SCIENCES,
                 }
                 course_category = _legacy_map.get(legacy_cat)
 

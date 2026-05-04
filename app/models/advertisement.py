@@ -59,5 +59,5 @@ class Advertisement(Base):
     )
 
     assessment = relationship("VacancyAssessment")
-    audit_trail = relationship("AdvertisementAudit", back_populates="advertisement")
+    audit_trail = relationship("AdvertisementAudit", back_populates="advertisement", cascade="all, delete-orphan")
     publication = relationship("PublishedAdvertisement", back_populates="advertisement", uselist=False)

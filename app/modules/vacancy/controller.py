@@ -77,10 +77,10 @@ class VacancyController:
         if course_obj:
             legacy_cat = derive_course_category(course_obj.name, course_obj.level)
             _legacy_map = {
-                "Engineering Diploma": CourseCategory.ENGINEERING_DIPLOMA,
-                "Engineering Degree": CourseCategory.ENGINEERING_DEGREE,
-                "HMCT": CourseCategory.HMCT,
-                "Applied Sciences": CourseCategory.APPLIED_SCIENCES,
+                "Engineering & Technology (Diploma)": CourseCategory.ENGINEERING_DIPLOMA,
+                "Engineering (Degree - B.E./B.Tech)": CourseCategory.ENGINEERING_DEGREE,
+                "HMCT (Hotel Management)": CourseCategory.HMCT,
+                "Non-Engineering (Applied Sciences)": CourseCategory.APPLIED_SCIENCES,
             }
             course_cat = _legacy_map.get(legacy_cat)
             
@@ -106,16 +106,26 @@ class VacancyController:
         ]
 
         # 3. Call AI Service
-        ai_res = await self.ai_service.analyze_vacancy(
-            institution_name=inst_obj.name if inst_obj else "Unknown",
-            course_name=course_obj.name if course_obj else "Unknown",
-            academic_year=req.academic_year,
-            intake_seats=intake_obj.approved_seats if intake_obj else 0,
-            actual_admitted=intake_obj.actual_admitted if intake_obj else 0,
-            required_by_norms=assessment.required_count,
-            current_effective_staff=assessment.effective_existing,
-            norm_ratio=int(norm.faculty_student_ratio) if norm else 20,
-            faculty_list=faculty_list
+        ai_res = await self.ai_service.analyze(
+            payload={
+                "institution_name": inst_obj.name if inst_obj else "Unknown",
+                "course_name": course_obj.name if course_obj else "Unknown",
+                "academic_year": req.academic_year,
+                "required_faculty": assessment.required_count,
+                "existing_faculty_count": assessment.effective_existing,
+                "suggested_vacancy": assessment.suggested_vacancy
+            },
+            faculty_list=faculty_list,
+            norm_info={
+                "faculty_student_ratio": int(norm.faculty_student_ratio) if norm else 20,
+                "min_qualification": norm.min_qualification if norm else "",
+                "max_age": norm.max_age if norm else 38,
+                "workload_hours_per_week": norm.workload_hours_per_week if norm else 18
+            },
+            intake_info={
+                "approved_seats": intake_obj.approved_seats if intake_obj else 0,
+                "actual_admitted": intake_obj.actual_admitted if intake_obj else 0
+            }
         )
 
         # 4. Update assessment with AI suggestion
@@ -128,7 +138,16 @@ class VacancyController:
         return {
             "status": "success",
             "data": {
-                **assessment.__dict__,
+                "id": str(assessment.id),
+                "institution_id": assessment.institution_id,
+                "course_id": assessment.course_id,
+                "academic_year": assessment.academic_year,
+                "required_count": assessment.required_count,
+                "total_existing": assessment.total_existing,
+                "effective_existing": assessment.effective_existing,
+                "suggested_vacancy": assessment.suggested_vacancy,
+                "status": assessment.status,
+                "ai_suggestion_notes": assessment.ai_suggestion_notes,
                 "anomaly_count": len(assessment.anomalies),
                 "ai_analysis": ai_res
             }
@@ -170,8 +189,10 @@ class VacancyController:
         if course_obj:
             legacy_cat = derive_course_category(course_obj.name, course_obj.level)
             _legacy_map = {
-                "Engineering Diploma": CourseCategory.ENGINEERING_DIPLOMA,
-                "Engineering Degree": CourseCategory.ENGINEERING_DEGREE,
+                "Engineering & Technology (Diploma)": CourseCategory.ENGINEERING_DIPLOMA,
+                "Engineering (Degree - B.E./B.Tech)": CourseCategory.ENGINEERING_DEGREE,
+                "HMCT (Hotel Management)": CourseCategory.HMCT,
+                "Non-Engineering (Applied Sciences)": CourseCategory.APPLIED_SCIENCES,
             }
             course_cat = _legacy_map.get(legacy_cat)
         
@@ -180,7 +201,17 @@ class VacancyController:
         return {
             "status": "success", 
             "data": {
-                **assessment.__dict__,
+                "id": str(assessment.id),
+                "institution_id": assessment.institution_id,
+                "course_id": assessment.course_id,
+                "academic_year": assessment.academic_year,
+                "required_count": assessment.required_count,
+                "total_existing": assessment.total_existing,
+                "effective_existing": assessment.effective_existing,
+                "suggested_vacancy": assessment.suggested_vacancy,
+                "confirmed_vacancy": assessment.confirmed_vacancy,
+                "status": assessment.status,
+                "ai_suggestion_notes": assessment.ai_suggestion_notes,
                 "anomaly_count": len(assessment.anomalies),
                 "unacknowledged_high_count": high_unack,
                 "anomalies": assessment.anomalies,

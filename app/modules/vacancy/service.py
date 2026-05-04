@@ -220,10 +220,10 @@ class VacancyService:
         if course_obj:
             legacy_cat = derive_course_category(course_obj.name, course_obj.level)
             _legacy_map = {
-                "Engineering Diploma": CourseCategory.ENGINEERING_DIPLOMA,
-                "Engineering Degree": CourseCategory.ENGINEERING_DEGREE,
-                "HMCT": CourseCategory.HMCT,
-                "Applied Sciences": CourseCategory.APPLIED_SCIENCES,
+                "Engineering & Technology (Diploma)": CourseCategory.ENGINEERING_DIPLOMA,
+                "Engineering (Degree - B.E./B.Tech)": CourseCategory.ENGINEERING_DEGREE,
+                "HMCT (Hotel Management)": CourseCategory.HMCT,
+                "Non-Engineering (Applied Sciences)": CourseCategory.APPLIED_SCIENCES,
             }
             course_cat = _legacy_map.get(legacy_cat)
 
@@ -237,15 +237,15 @@ class VacancyService:
         }
 
         # 2. Run Anomaly Checks
-        from app.modules.vacancy.anomaly_engine import run_vacancy_anomaly_check
+        from app.modules.vacancy.anomaly_engine import check_individual_faculty
         
         faculty_items, total, effective, _ = await self.get_faculty_list(db, institution_id, course_id, academic_year)
         
         qualified_effective = 0
         for f in faculty_items:
             if f.employment_type in ["PERMANENT", "CONTRACT", "PROBATION"]:
-                anoms = run_vacancy_anomaly_check(f, norm_info, course_obj.name if course_obj else "Unknown")
-                is_qualified = not any(a["type"] in ["UNDER_QUALIFIED", "OVER_AGE"] for a in anoms)
+                anoms = check_individual_faculty(f, course_obj.name if course_obj else "Unknown", norm_info)
+                is_qualified = not any(a.anomaly_type in ["UNDER_QUALIFIED", "OVER_AGE"] for a in anoms)
                 if is_qualified:
                     qualified_effective += 1
 
@@ -283,24 +283,8 @@ class VacancyService:
             )
             db.add(assessment)
             await db.flush()
-        
-        # 5. Persist the updated state and Run Anomalies to DB
-        from app.models.vacancy_assessment import Anomaly
-        
-        await db.execute(delete(Anomaly).filter(Anomaly.assessment_id == assessment.id))
 
-        for f in faculty_items:
-            anoms = run_vacancy_anomaly_check(f, norm_info, course_obj.name if course_obj else "Unknown")
-            for a_data in anoms:
-                new_a = Anomaly(
-                    assessment_id=assessment.id,
-                    faculty_id=f.id,
-                    type=a_data["type"],
-                    severity=a_data["severity"],
-                    message=a_data["message"]
-                )
-                db.add(new_a)
-
+        # 5. Persist final state
         if assessment.status != "CONFIRMED":
             assessment.required_count = requirement.computed_required_count
             assessment.total_existing = total
@@ -313,7 +297,14 @@ class VacancyService:
             assessment.total_existing = total
             assessment.effective_existing = effective
 
-        # 4. Anomaly Engine (Redundant but kept for logic consistency)
+        # 6. Refresh Anomalies in DB
+        from app.models.vacancy_anomaly import VacancyAnomaly
+        from app.modules.vacancy.anomaly_engine import run_vacancy_anomaly_check as run_assessment_anomaly
+        
+        # Clear old anomalies
+        await db.execute(delete(VacancyAnomaly).filter(VacancyAnomaly.assessment_id == assessment.id))
+
+        # Previous year check for bulk engine
         prev_year = str(int(academic_year.split('-')[0]) - 1) + "-" + str(int(academic_year.split('-')[1]) - 1)
         prev_stmt = select(VacancyAssessment).filter(
             VacancyAssessment.institution_id == institution_id,
@@ -324,25 +315,10 @@ class VacancyService:
         prev_assessment = prev_res.scalars().first()
         prev_confirmed = prev_assessment.confirmed_vacancy if prev_assessment else None
 
-        from app.modules.vacancy.anomaly_engine import run_vacancy_anomaly_check as run_assessment_anomaly
+        # Run bulk anomaly engine
         anomalies_data = run_assessment_anomaly(
             faculty_items, assessment, course_obj.name if course_obj else "Unknown", norm_info, prev_confirmed
         )
-
-        qualified_effective = effective
-        for a in anomalies_data:
-            if a.severity == "HIGH" and a.anomaly_type in ["UNDER_QUALIFIED", "OVER_AGE"]:
-                qualified_effective -= 1
-        
-        new_suggested = requirement.computed_required_count - qualified_effective
-        if new_suggested < 0: new_suggested = 0
-        
-        if assessment.status != "CONFIRMED":
-            assessment.suggested_vacancy = new_suggested
-            if qualified_effective < effective:
-                assessment.ai_suggestion_notes = f"Adjusted: {effective - qualified_effective} existing faculty are under-qualified/over-age."
-        
-        await db.execute(delete(VacancyAnomaly).filter(VacancyAnomaly.assessment_id == assessment.id))
         
         for a in anomalies_data:
             db.add(VacancyAnomaly(

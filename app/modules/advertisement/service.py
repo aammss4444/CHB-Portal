@@ -473,13 +473,6 @@ class AdvertisementService:
                 message="Published advertisements cannot be deleted",
             )
 
-        await self._write_audit(
-            db=db,
-            ad_id=ad.id,
-            action=AdvertisementAction.DELETED,
-            user_id=current_user.id,
-            new_value={"status": current_status},
-        )
         await db.delete(ad)
         await db.commit()
         return {"message": f"Advertisement {ad_id} deleted successfully"}
