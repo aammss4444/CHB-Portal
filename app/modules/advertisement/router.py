@@ -31,6 +31,15 @@ admin_only = RoleChecker([RoleEnum.ADMIN])
 admin_or_principal = RoleChecker([RoleEnum.ADMIN, RoleEnum.PRINCIPAL])
 
 
+@router.get("/", dependencies=[Depends(admin_or_principal)])
+async def list_advertisements(
+    pagination: PaginationParams = Depends(),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return await controller.list_advertisements(db, current_user, pagination.skip, pagination.limit)
+
+
 @router.post(
     "/generate",
     response_model=AIAdvertisementGenerationEnvelope,

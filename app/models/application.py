@@ -38,6 +38,7 @@ class Application(Base):
     application_number = Column(String(50), nullable=False, unique=True)
     status = Column(String(30), nullable=False, default=ApplicationStatus.DRAFT.value)
     applied_designation = Column(String(100), nullable=True)
+    cover_letter = Column(Text, nullable=True)
     declaration_accepted = Column(Boolean, nullable=False, default=False)
     submitted_at = Column(DateTime(timezone=True), nullable=True)
     reviewed_at = Column(DateTime(timezone=True), nullable=True)

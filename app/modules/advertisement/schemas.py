@@ -21,6 +21,8 @@ class AdvertisementGenerateRequest(BaseModel):
     required_documents: Optional[str] = "- Degree Certificates\n- Mark Sheets\n- Experience Certificates\n- ID Proof"
     important_instructions: Optional[str] = "- Candidates must attend walk-in interview\n- Original documents required"
     interview_venue: Optional[str] = "Institution Campus"
+    content_en: Optional[str] = None
+    content_mr: Optional[str] = None
 
 class AdvertisementUpdateRequest(BaseModel):
     content_en: str

@@ -1,9 +1,12 @@
 import json
 import re
+import logging
 from typing import Any
 
 from app.services.ocr_service import extract_text
 from app.services.openai_client import analyze_documents, openai_ready
+
+logger = logging.getLogger(__name__)
 
 
 def _mask_sensitive(text: str) -> str:
@@ -34,12 +37,19 @@ class DocumentAIEngine:
         return normalized
 
     async def analyze(self, documents, profile: dict[str, Any]) -> dict[str, Any]:
+        logger.info(f"AI Scrutiny: Analyzing {len(documents)} documents for candidate {profile.get('name')}")
         extracted_docs: list[dict[str, Any]] = []
         for doc in documents:
             file_path = getattr(doc, "file_path", None) or doc.get("file_path") or doc.get("path")
             doc_type = getattr(doc, "document_type", None) or doc.get("document_type") or doc.get("type")
+            
+            logger.info(f"AI Scrutiny: Extracting text from {doc_type} ({file_path})...")
             text = await extract_text(file_path)
             text = _mask_sensitive(text)
+            
+            snippet = text[:50].replace('\n', ' ') + "..." if text else "EMPTY"
+            logger.info(f"AI Scrutiny: Extracted {len(text)} chars from {doc_type}. Snippet: {snippet}")
+            
             extracted_docs.append({"type": doc_type, "text": text[:3000]})
 
         prompt = f"""

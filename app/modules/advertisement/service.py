@@ -228,8 +228,8 @@ class AdvertisementService:
             required_documents=req.required_documents,
             important_instructions=req.important_instructions,
             interview_venue=req.interview_venue,
-            content_en=content_en,
-            content_mr=content_mr,
+            content_en=req.content_en if req.content_en else content_en,
+            content_mr=req.content_mr if req.content_mr else content_mr,
             status=AdvertisementStatus.DRAFT.value,
             application_start_date=req.application_start_date,
             application_end_date=req.application_end_date,
@@ -561,6 +561,7 @@ class AdvertisementService:
         
         rows = (await db.execute(stmt)).mappings().all()
         return [dict(row) for row in rows], total
+
     async def get_advertisement_meta(self, db: AsyncSession, current_user: User) -> dict[str, Any]:
         institutions_stmt = select(Institution.id, Institution.name)
         if current_user.role == RoleEnum.PRINCIPAL:
@@ -590,6 +591,7 @@ class AdvertisementService:
                 select(Norm.min_qualification, Norm.faculty_student_ratio).order_by(Norm.id.desc())
             )
         ).first()
+
         norms = {
             "min_qualification": latest_norm.min_qualification if latest_norm else None,
             "faculty_student_ratio": float(latest_norm.faculty_student_ratio) if latest_norm else None,
@@ -602,3 +604,29 @@ class AdvertisementService:
             "reservation": {"SC": 13, "ST": 7, "OBC": 19, "EWS": 10},
             "suggested_vacancy": None,
         }
+
+    async def list_advertisements(
+        self,
+        db: AsyncSession,
+        current_user: User,
+        skip: int = 0,
+        limit: int = 10,
+    ) -> tuple[List[Advertisement], int]:
+        """List all advertisements with role-based filtering."""
+        stmt = select(Advertisement).options(selectinload(Advertisement.audit_trail))
+        
+        if current_user.role == RoleEnum.PRINCIPAL:
+            if not current_user.institution_id:
+                return [], 0
+            stmt = stmt.where(Advertisement.institution_id == current_user.institution_id)
+            
+        # Count total
+        from sqlalchemy import func
+        count_stmt = select(func.count()).select_from(stmt.subquery())
+        total = (await db.execute(count_stmt)).scalar_one()
+        
+        # Paginate and order
+        stmt = stmt.order_by(Advertisement.created_at.desc()).offset(skip).limit(limit)
+        results = (await db.execute(stmt)).scalars().all()
+        
+        return list(results), total

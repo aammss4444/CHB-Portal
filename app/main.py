@@ -1,5 +1,7 @@
+# Heartbeat: 2026-05-04 18:05
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+from datetime import datetime
 from contextlib import asynccontextmanager
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import text
@@ -52,6 +54,9 @@ async def lifespan(app: FastAPI):
         await conn.execute(text("ALTER TABLE norms ADD COLUMN IF NOT EXISTS workload_hours_per_week INTEGER DEFAULT 18"))
         await conn.execute(text("ALTER TABLE norms DROP COLUMN IF EXISTS practical_to_theory_ratio"))
         await conn.execute(text("ALTER TABLE existing_faculty ADD COLUMN IF NOT EXISTS date_of_birth DATE"))
+        
+        # Hotfix for Applications
+        await conn.execute(text("ALTER TABLE applications ADD COLUMN IF NOT EXISTS cover_letter TEXT"))
         
         # Hotfix for Candidate registration
         await conn.execute(text("ALTER TABLE candidates ALTER COLUMN date_of_birth DROP NOT NULL"))
@@ -116,27 +121,46 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     elif isinstance(exc.detail, str):
         message = exc.detail
 
-    return JSONResponse(
+    response = JSONResponse(
         status_code=exc.status_code,
         content={"status": "error", "code": code, "message": message},
     )
+    origin = request.headers.get("origin")
+    if origin in cors_origins or "*" in cors_origins:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    return response
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     """
     Catch all unexpected errors and hide internal details from the user.
     """
-    # In a real production app, you would log 'exc' to a service like Sentry or CloudWatch here.
-    print(f"CRITICAL ERROR: {str(exc)}") 
+    import traceback
+    error_detail = traceback.format_exc()
+    print(f"CRITICAL ERROR: {str(exc)}\n{error_detail}") 
     
-    return JSONResponse(
+    # Log to a file for easier debugging
+    with open("backend_error.log", "a") as f:
+        f.write(f"\n--- {datetime.now()} ---\n")
+        f.write(error_detail)
+        f.write("\n")
+
+    response = JSONResponse(
         status_code=500,
         content={
             "status": "error",
             "code": "INTERNAL_SERVER_ERROR",
-            "message": "An unexpected internal error occurred. Please contact support.",
+            "message": f"An unexpected internal error occurred: {str(exc)}",
         },
     )
+    # Manual CORS header injection as fallback for exception handlers
+    origin = request.headers.get("origin")
+    if origin and (origin in cors_origins or "*" in cors_origins):
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+    
+    return response
 
 app.include_router(auth_router, prefix="/api")
 app.include_router(req_router, prefix="/api")

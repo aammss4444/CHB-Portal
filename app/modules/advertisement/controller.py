@@ -76,6 +76,55 @@ class AdvertisementController:
             logger.exception(f"Error getting advertisement {ad_id}")
             raise HTTPException(status_code=500, detail=str(e))
 
+    async def generate_advertisement_ai(self, db: AsyncSession, current_user: User, req: AdvertisementAIRequest):
+        """
+        Pure AI generation endpoint. Does NOT save to DB yet.
+        Used for previewing before finalizing.
+        """
+        try:
+            from sqlalchemy import select
+            from app.models.institution import Institution, Course
+            
+            await self.service.assert_institution_scope(current_user, req.institution_id)
+            
+            inst = (await db.execute(select(Institution).filter(Institution.id == req.institution_id))).scalars().first()
+            course_obj = (await db.execute(select(Course).filter(Course.id == req.course_id))).scalars().first()
+            
+            # 1. Fetch norms for qualification context
+            course_category = derive_course_category(course_obj.name, course_obj.level)
+            try:
+                norm = await resolve_norm(db, req.academic_year, course_category)
+            except NormResolutionError:
+                norm = None
+            
+            qualification = norm.min_qualification if norm and norm.min_qualification else "As per AICTE/DTE norms"
+
+            # 2. Call AI Service
+            ai_result = await self.ai_service.generate(
+                {
+                    "institution_name": inst.name if inst else "Unknown",
+                    "course_name": course_obj.name if course_obj else "Unknown",
+                    "course_level": course_obj.level if course_obj else "UG",
+                    "vacancy_count": req.vacancy_count,
+                    "qualification": qualification,
+                    "reservation": {"SC": 13, "ST": 7, "OBC": 19, "EWS": 10},
+                    "deadline": req.deadline,
+                    "application_mode": req.application_mode,
+                }
+            )
+            
+            from app.modules.advertisement.schemas import AdvertisementAIResponse
+            return {
+                "status": "success",
+                "data": {
+                    "template_ad": {}, # No template yet as this is pre-save
+                    "ai_generated_ad": AdvertisementAIResponse.model_validate(ai_result)
+                }
+            }
+        except Exception as e:
+            logger.exception("CRITICAL: generate_advertisement_ai crashed")
+            raise HTTPException(status_code=500, detail=str(e))
+
     async def get_recruitment_context(self, db: AsyncSession, current_user: User, institution_id: int, course_id: int, academic_year: str):
         try:
             from sqlalchemy import select
@@ -165,6 +214,8 @@ class AdvertisementController:
                     "institution": {"id": inst.id, "name": inst.name, "code": inst.code, "district": inst.district, "type": inst.type},
                     "course": {"id": course_obj.id, "name": course_obj.name, "level": course_obj.level},
                     "academic_year": academic_year,
+                    "can_generate_ad": assessment is not None and assessment.status == "CONFIRMED",
+                    "vacancy_count": assessment.confirmed_vacancy if assessment else 0,
                     "norms": {
                         "min_qualification": qualification,
                         "faculty_student_ratio": faculty_student_ratio,
@@ -204,3 +255,44 @@ class AdvertisementController:
     async def delete_advertisement(self, db: AsyncSession, ad_id: UUID, current_user: User):
         data = await self.service.delete_advertisement(db, ad_id, current_user)
         return {"status": "success", "data": data}
+
+    async def list_advertisements(self, db: AsyncSession, current_user: User, skip: int = 0, limit: int = 10):
+        try:
+            items, total = await self.service.list_advertisements(db, current_user, skip, limit)
+            from app.modules.advertisement.schemas import AdvertisementResponse
+            return {
+                "status": "success",
+                "data": [AdvertisementResponse.model_validate(item) for item in items],
+                "total": total
+            }
+        except Exception as e:
+            logger.exception("Error listing advertisements")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def list_published_advertisements(self, db: AsyncSession, institution_id: Optional[int], course_id: Optional[int], academic_year: Optional[str], skip: int, limit: int):
+        try:
+            items, total = await self.service.list_published_advertisements(db, institution_id, course_id, academic_year, skip, limit)
+            return {
+                "status": "success",
+                "data": items, # Service already returns dictionaries/objects for published list
+                "total": total
+            }
+        except Exception as e:
+            logger.exception("Error listing published advertisements")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_advertisement_meta(self, db: AsyncSession, current_user: User):
+        try:
+            data = await self.service.get_advertisement_meta(db, current_user)
+            return {"status": "success", "data": data}
+        except Exception as e:
+            logger.exception("Error getting advertisement meta")
+            raise HTTPException(status_code=500, detail=str(e))
+
+    async def get_public_advertisement(self, db: AsyncSession, public_token: str):
+        try:
+            data = await self.service.get_public_advertisement(db, public_token)
+            return {"status": "success", "data": data}
+        except Exception as e:
+            logger.exception(f"Error getting public advertisement for token {public_token}")
+            raise HTTPException(status_code=500, detail=str(e))

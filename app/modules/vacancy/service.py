@@ -323,6 +323,7 @@ class VacancyService:
         for a in anomalies_data:
             db.add(VacancyAnomaly(
                 assessment_id=assessment.id,
+                institution_id=institution_id,
                 anomaly_type=a.anomaly_type,
                 severity=a.severity,
                 description=a.description,

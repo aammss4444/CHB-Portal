@@ -10,6 +10,8 @@ from app.modules.application.schemas import (
     ApplicationResponse,
     ApplicationCreateRequest,
     ApplicationSubmitRequest,
+    ApplicationActionRequest,
+    ApplicationAISummaryEnvelope,
 )
 from app.modules.application.service import ApplicationService
 from app.modules.application.ai_engine import DocumentAIEngine
@@ -29,83 +31,124 @@ class ApplicationController:
         from app.models.application_document import ApplicationDocument
         from app.models.candidate import Candidate
         import json
+        import logging
+        logger = logging.getLogger(__name__)
 
         async with AsyncSessionLocal() as db:
-            app = (await db.execute(select(Application).where(Application.id == application_id))).scalars().first()
-            if not app:
-                return
-            docs_list = (
-                await db.execute(
-                    select(ApplicationDocument)
-                    .where(ApplicationDocument.application_id == application_id)
-                    .order_by(ApplicationDocument.uploaded_at.asc())
-                )
-            ).scalars().all()
-            if not docs_list:
-                return
-
-            candidate_obj = (
-                await db.execute(
-                    select(Candidate)
-                    .where(Candidate.user_id == candidate_user_id)
-                    .options(selectinload(Candidate.qualifications), selectinload(Candidate.experiences))
-                )
-            ).scalars().first()
-            if not candidate_obj:
-                return
-
-            docs_metadata = [{"type": d.document_type, "path": d.file_path} for d in docs_list]
-            candidate_profile = self._candidate_profile(candidate_obj)
-            ai_result = await self.ai_service.process(docs_metadata, candidate_profile)
-            ai_confidence = ai_result.get("confidence_score", 0.0)
             try:
-                ai_confidence_pct = int(float(ai_confidence) * 100)
-            except (TypeError, ValueError):
-                ai_confidence_pct = 0
-            ai_confidence_pct = max(0, min(100, ai_confidence_pct))
+                logger.info(f"Starting AI Scrutiny for application {application_id}")
+                app = (await db.execute(select(Application).where(Application.id == application_id))).scalars().first()
+                if not app:
+                    logger.warning(f"Application {application_id} not found for AI Scrutiny")
+                    return
+                docs_list = (
+                    await db.execute(
+                        select(ApplicationDocument)
+                        .where(ApplicationDocument.application_id == application_id)
+                        .order_by(ApplicationDocument.uploaded_at.asc())
+                    )
+                ).scalars().all()
+                if not docs_list:
+                    logger.info(f"No documents found for application {application_id}")
+                    return
 
-            await db.execute(
-                update(Application)
-                .where(Application.id == application_id)
-                .values(
-                    ai_status=ai_result.get("status", "REQUIRES_REVIEW"),
-                    ai_scrutiny_data=json.dumps(ai_result),
-                    ai_confidence_score=ai_confidence_pct,
+                candidate_obj = (
+                    await db.execute(
+                        select(Candidate)
+                        .where(Candidate.user_id == candidate_user_id)
+                        .options(selectinload(Candidate.qualifications), selectinload(Candidate.experiences))
+                    )
+                ).scalars().first()
+                if not candidate_obj:
+                    logger.warning(f"Candidate not found for user {candidate_user_id}")
+                    return
+
+                docs_metadata = [{"type": d.document_type, "path": d.file_path} for d in docs_list]
+                candidate_profile = self._candidate_profile(candidate_obj)
+                
+                logger.info(f"Calling AI Service for {len(docs_metadata)} documents...")
+                ai_result = await self.ai_service.process(docs_metadata, candidate_profile)
+                logger.info(f"AI Service response received for app {application_id}. Status: {ai_result.get('status')}")
+
+                ai_confidence = ai_result.get("confidence_score", 0.0)
+                try:
+                    ai_confidence_pct = int(float(ai_confidence) * 100)
+                except (TypeError, ValueError):
+                    ai_confidence_pct = 0
+                ai_confidence_pct = max(0, min(100, ai_confidence_pct))
+
+                await db.execute(
+                    update(Application)
+                    .where(Application.id == application_id)
+                    .values(
+                        ai_status=ai_result.get("status", "REQUIRES_REVIEW"),
+                        ai_scrutiny_data=json.dumps(ai_result),
+                        ai_confidence_score=ai_confidence_pct,
+                    )
                 )
-            )
-            await db.commit()
+
+                # Update individual document statuses
+                doc_analysis = ai_result.get("document_analysis", [])
+                for doc_res in doc_analysis:
+                    dtype = doc_res.get("document_type")
+                    issues = doc_res.get("issues", [])
+                    
+                    # Basic heuristic for status
+                    v_status = "VALID" if not issues else "INVALID"
+                    v_msg = "; ".join(issues) if issues else None
+                    
+                    for d in docs_list:
+                        if d.document_type == dtype:
+                            d.validation_status = v_status
+                            d.validation_message = v_msg
+                            db.add(d) # Mark for update
+
+                await db.commit()
+                logger.info(f"Successfully persisted AI Scrutiny results for application {application_id}")
+            except Exception as e:
+                logger.error(f"AI Scrutiny Background Task failed for app {application_id}: {str(e)}")
+                # Optionally update app status to ERROR
+                try:
+                    await db.execute(
+                        update(Application)
+                        .where(Application.id == application_id)
+                        .values(ai_status="REQUIRES_REVIEW")
+                    )
+                    await db.commit()
+                except:
+                    pass
 
     async def create_application(self, db: AsyncSession, current_user: User, req: ApplicationCreateRequest):
         data = await self.service.create_application(db, current_user, req)
         payload = ApplicationResponse.model_validate(data, from_attributes=True).model_dump()
         return {"status": "success", "data": payload}
 
-    async def upload_document(
+    async def upload_documents_bulk(
         self,
         db: AsyncSession,
         current_user: User,
         application_id: UUID,
-        document_type: str,
-        file: UploadFile,
+        files: list[UploadFile],
         background_tasks: BackgroundTasks,
+        document_type: str | None = None,
     ):
-        # 1. Standard upload and basic validation
-        doc = await self.service.upload_document(
+        # 1. Bulk upload
+        docs = await self.service.upload_documents_bulk(
             db,
             current_user,
             application_id,
-            document_type,
-            file,
+            files,
             background_tasks,
+            document_type=document_type,
         )
         
-        # 2. Trigger AI scrutiny asynchronously; upload flow remains fast and non-blocking.
+        # 2. Trigger AI scrutiny
         background_tasks.add_task(self._run_ai_analysis_and_persist, application_id, current_user.id)
         
-        payload = ApplicationDocumentResponse.model_validate(doc, from_attributes=True).model_dump()
+        from app.modules.application.schemas import ApplicationDocumentResponse
         return {
             "status": "success", 
-            "data": payload,
+            "data": [ApplicationDocumentResponse.model_validate(d, from_attributes=True).model_dump() for d in docs],
             "ai_analysis": {"status": "QUEUED", "message": "AI scrutiny queued for background processing"},
         }
 
@@ -205,6 +248,16 @@ class ApplicationController:
     ):
         data = await self.service.submit_application(db, current_user, application_id, req)
         return {"status": "success", "data": data}
+
+    async def process_application_action(
+        self,
+        db: AsyncSession,
+        current_user: User,
+        application_id: UUID,
+        req: ApplicationActionRequest,
+    ):
+        app = await self.service.process_application_action(db, current_user, application_id, req)
+        return {"status": "success", "data": ApplicationResponse.model_validate(app, from_attributes=True).model_dump()}
 
     async def withdraw_application(self, db: AsyncSession, current_user: User, application_id: UUID):
         data = await self.service.withdraw_application(db, current_user, application_id)

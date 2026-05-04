@@ -92,7 +92,7 @@ class SelectionService:
                 shortlisted_by=current_user.id,
                 shortlist_remarks=req.remarks
             ))
-            app.status = ApplicationStatus.UNDER_REVIEW.value
+            app.status = ApplicationStatus.SHORTLISTED.value
 
         await self._write_audit(db, "Advertisement", advertisement_id, "SHORTLIST_CANDIDATES", current_user.id)
         await db.commit()
@@ -507,28 +507,53 @@ class SelectionService:
         }
 
     async def get_selection_dashboard(self, db: AsyncSession, advertisement_id: UUID) -> Dict[str, Any]:
-        ranked_list = await self.get_ranked_list(db, advertisement_id)
-        if not ranked_list:
-            self._raise_error(400, "NO_RANKINGS", "No data for dashboard")
+        # 1. Fetch Basic Recruitment Stats
+        ad = (await db.execute(select(Advertisement).where(Advertisement.id == advertisement_id))).scalars().first()
+        if not ad:
+            self._raise_error(404, "ADVERTISEMENT_NOT_FOUND", "Advertisement not found")
 
+        total_apps = (await db.execute(select(func.count(Application.id)).where(Application.advertisement_id == advertisement_id))).scalar() or 0
+        shortlisted_count = (await db.execute(select(func.count(ShortlistedCandidate.id)).where(ShortlistedCandidate.advertisement_id == advertisement_id))).scalar() or 0
+        marked_count = (await db.execute(select(func.count(InterviewMarks.id)).where(InterviewMarks.advertisement_id == advertisement_id))).scalar() or 0
+
+        # 2. Try to fetch rankings
+        ranked_list = await self.get_ranked_list(db, advertisement_id)
+        
         distribution = [
             {"range": "0-40", "count": 0},
             {"range": "40-70", "count": 0},
             {"range": "70-100", "count": 0}
         ]
-        for r in ranked_list:
-            score = float(r["final_score"])
-            if score < 40: distribution[0]["count"] += 1
-            elif score < 70: distribution[1]["count"] += 1
-            else: distribution[2]["count"] += 1
+        
+        bias_flags = []
+        insights = ["Generate rankings to see AI-powered selection insights."]
+        top_candidates = []
 
-        ai_data = await self.run_ai_selection_analysis(db, advertisement_id)
-
+        if ranked_list:
+            top_candidates = ranked_list[:10]
+            for r in ranked_list:
+                score = float(r["final_score"])
+                if score < 40: distribution[0]["count"] += 1
+                elif score < 70: distribution[1]["count"] += 1
+                else: distribution[2]["count"] += 1
+            
+            try:
+                ai_data = await self.run_ai_selection_analysis(db, advertisement_id)
+                bias_flags = ai_data["ai_analysis"].get("bias_flags", [])
+                insights = ai_data["ai_analysis"].get("insights", [])
+            except Exception:
+                # Fallback if AI analysis fails but rankings exist
+                pass
+        
         return {
-            "top_candidates": ranked_list[:10],
+            "status": ad.status,
+            "total_applications": total_apps,
+            "shortlisted_count": shortlisted_count,
+            "marked_count": marked_count,
+            "top_candidates": top_candidates,
             "score_distribution": distribution,
-            "bias_flags": ai_data["ai_analysis"]["bias_flags"],
-            "insights": ai_data["ai_analysis"]["insights"]
+            "bias_flags": bias_flags,
+            "insights": insights
         }
 
     async def create_ai_snapshot(self, db: AsyncSession, current_user: User, advertisement_id: UUID) -> Dict[str, Any]:

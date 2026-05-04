@@ -25,11 +25,23 @@ class DocumentTypeEnum(str, Enum):
 
 class ApplicationCreateRequest(BaseModel):
     advertisement_id: UUID
-    applied_designation: str
+    applied_designation: Optional[str] = "Lecturer (CHB)"
+    cover_letter: Optional[str] = None
 
 
 class ApplicationSubmitRequest(BaseModel):
     declaration_accepted: bool
+
+
+class ApplicationAction(str, Enum):
+    APPROVE = "APPROVE"
+    REJECT = "REJECT"
+    UNDER_REVIEW = "UNDER_REVIEW"
+
+
+class ApplicationActionRequest(BaseModel):
+    action: ApplicationAction
+    remarks: Optional[str] = None
 
 
 class ApplicationDocumentResponse(BaseModel):

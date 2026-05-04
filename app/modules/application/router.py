@@ -1,3 +1,4 @@
+from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Query, UploadFile, status
@@ -10,6 +11,7 @@ from app.modules.application.controller import ApplicationController
 from app.modules.application.schemas import (
     ApplicationCreateRequest,
     ApplicationSubmitRequest,
+    ApplicationActionRequest,
     ApplicationAISummaryEnvelope,
     ApplicationAIAnalyzeEnvelope,
 )
@@ -34,21 +36,21 @@ async def create_application(
 
 
 @router.post("/applications/{application_id}/documents", dependencies=[Depends(candidate_only)])
-async def upload_document(
+async def upload_documents(
     application_id: UUID,
     background_tasks: BackgroundTasks,
-    document_type: str = Form(...),
-    file: UploadFile = File(...),
+    documents: List[UploadFile] = File(...),
+    document_type: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return await controller.upload_document(
+    return await controller.upload_documents_bulk(
         db,
         current_user,
         application_id,
-        document_type,
-        file,
+        documents,
         background_tasks,
+        document_type=document_type,
     )
 
 
@@ -88,6 +90,16 @@ async def submit_application(
     current_user: User = Depends(get_current_user),
 ):
     return await controller.submit_application(db, current_user, application_id, req)
+
+
+@router.post("/applications/{application_id}/action", dependencies=[Depends(principal_or_admin)])
+async def process_application_action(
+    application_id: UUID,
+    req: ApplicationActionRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return await controller.process_application_action(db, current_user, application_id, req)
 
 
 @router.delete("/applications/{application_id}/withdraw", dependencies=[Depends(candidate_only)])
