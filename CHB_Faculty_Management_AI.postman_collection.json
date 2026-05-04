@@ -1,0 +1,374 @@
+﻿{
+  "info": {
+    "_postman_id": "chb-faculty-mgmt-ai-v1",
+    "name": "CHB Faculty Management + AI Workflow System",
+    "description": "Enterprise-grade collection. Upload Documents uses multipart/form-data.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "base_url", "value": "http://localhost:8000/api/v1", "type": "string" },
+    { "key": "token", "value": "", "type": "string" },
+    { "key": "refresh_token", "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "1. Authentication",
+      "description": "Handles all authentication flows including login, registration, token management, and role-based access control.",
+      "item": [
+        {
+          "name": "Login",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/login", "host": ["{{base_url}}"], "path": ["auth", "login"] },
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"admin@institution.edu\",\n  \"password\": \"SecurePass@123\"\n}" },
+            "description": "Authenticate user and receive JWT access + refresh tokens."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));", "const json = pm.response.json();", "if (json.data && json.data.token) {", "  pm.environment.set('token', json.data.token);", "  pm.environment.set('refresh_token', json.data.refresh_token);", "}"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "Register",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/register", "host": ["{{base_url}}"], "path": ["auth", "register"] },
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"John Doe\",\n  \"email\": \"john.doe@institution.edu\",\n  \"password\": \"SecurePass@123\",\n  \"role\": \"admin\",\n  \"institution_id\": \"inst_001\"\n}" },
+            "description": "Register a new user in the system with role assignment."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 201', () => pm.response.to.have.status(201));"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{base_url}}/auth/logout", "host": ["{{base_url}}"], "path": ["auth", "logout"] },
+            "body": { "mode": "raw", "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}" },
+            "description": "Invalidate the current session and revoke tokens."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));", "pm.environment.unset('token');", "pm.environment.unset('refresh_token');"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": { "raw": "{{base_url}}/auth/refresh", "host": ["{{base_url}}"], "path": ["auth", "refresh"] },
+            "body": { "mode": "raw", "raw": "{\n  \"refresh_token\": \"{{refresh_token}}\"\n}" },
+            "description": "Obtain a new access token using the refresh token."
+          },
+          "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));", "const json = pm.response.json();", "if (json.data && json.data.token) pm.environment.set('token', json.data.token);"], "type": "text/javascript" } }]
+        },
+        {
+          "name": "Role-Based Access",
+          "item": [
+            {
+              "name": "Get Roles",
+              "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/auth/roles", "host": ["{{base_url}}"], "path": ["auth", "roles"] }, "description": "Retrieve all available roles in the system." },
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }]
+            },
+            {
+              "name": "Assign Role",
+              "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/auth/roles/assign", "host": ["{{base_url}}"], "path": ["auth", "roles", "assign"] }, "body": { "mode": "raw", "raw": "{\n  \"user_id\": \"usr_001\",\n  \"role\": \"reviewer\"\n}" }, "description": "Assign a specific role to a user." },
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }]
+            },
+            {
+              "name": "Remove Role",
+              "request": { "method": "DELETE", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/auth/roles/remove", "host": ["{{base_url}}"], "path": ["auth", "roles", "remove"] }, "body": { "mode": "raw", "raw": "{\n  \"user_id\": \"usr_001\",\n  \"role\": \"reviewer\"\n}" }, "description": "Remove a role from a user." },
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }]
+            }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "2. Requirements (Step 1)",
+      "item": [
+        {
+          "name": "Core APIs",
+          "item": [
+            { "name": "Create Requirement", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/requirements", "host": ["{{base_url}}"], "path": ["requirements"] }, "body": { "mode": "raw", "raw": "{\n  \"institution_id\": \"inst_001\",\n  \"department\": \"Computer Science\",\n  \"course\": \"B.Tech\",\n  \"intake\": 60,\n  \"norm_type\": \"UGC\",\n  \"academic_year\": \"2025-26\"\n}" }, "description": "Create a new faculty requirement for a department/course." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 201', () => pm.response.to.have.status(201));"], "type": "text/javascript" } }] },
+            { "name": "Update Requirement", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/requirements/:req_id", "host": ["{{base_url}}"], "path": ["requirements", ":req_id"], "variable": [{ "key": "req_id", "value": "req_001" }] }, "body": { "mode": "raw", "raw": "{\n  \"intake\": 80,\n  \"norm_type\": \"AICTE\"\n}" }, "description": "Update an existing faculty requirement." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Get All Requirements", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/requirements?institution_id=inst_001&page=1&limit=20", "host": ["{{base_url}}"], "path": ["requirements"], "query": [{ "key": "institution_id", "value": "inst_001" }, { "key": "page", "value": "1" }, { "key": "limit", "value": "20" }] }, "description": "Retrieve all faculty requirements with pagination." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Get Requirement by ID", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/requirements/:req_id", "host": ["{{base_url}}"], "path": ["requirements", ":req_id"], "variable": [{ "key": "req_id", "value": "req_001" }] }, "description": "Fetch a single requirement by its ID." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Delete Requirement", "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/requirements/:req_id", "host": ["{{base_url}}"], "path": ["requirements", ":req_id"], "variable": [{ "key": "req_id", "value": "req_001" }] }, "description": "Soft-delete a faculty requirement." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] }
+          ]
+        },
+        {
+          "name": "AI Validation",
+          "item": [
+            { "name": "Validate Intake vs Norms", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/requirements/ai/validate-intake", "host": ["{{base_url}}"], "path": ["requirements", "ai", "validate-intake"] }, "body": { "mode": "raw", "raw": "{\n  \"req_id\": \"req_001\",\n  \"norm_type\": \"UGC\",\n  \"intake\": 60\n}" }, "description": "AI validates whether the intake aligns with regulatory norms." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Detect Over/Under Allocation", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/requirements/ai/detect-allocation", "host": ["{{base_url}}"], "path": ["requirements", "ai", "detect-allocation"] }, "body": { "mode": "raw", "raw": "{\n  \"institution_id\": \"inst_001\",\n  \"academic_year\": \"2025-26\"\n}" }, "description": "AI detects departments with over or under faculty allocation." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Suggest Optimization", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/requirements/ai/suggest-optimization", "host": ["{{base_url}}"], "path": ["requirements", "ai", "suggest-optimization"] }, "body": { "mode": "raw", "raw": "{\n  \"institution_id\": \"inst_001\",\n  \"academic_year\": \"2025-26\"\n}" }, "description": "AI suggests optimal faculty distribution across departments." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "3. Vacancy Identification (Step 2)",
+      "item": [
+        {
+          "name": "Core APIs",
+          "item": [
+            { "name": "Add Existing Faculty", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/vacancy/faculty", "host": ["{{base_url}}"], "path": ["vacancy", "faculty"] }, "body": { "mode": "raw", "raw": "{\n  \"institution_id\": \"inst_001\",\n  \"name\": \"Dr. Priya Sharma\",\n  \"department\": \"Computer Science\",\n  \"designation\": \"Associate Professor\",\n  \"qualification\": \"Ph.D\",\n  \"experience_years\": 10,\n  \"employment_type\": \"permanent\"\n}" }, "description": "Add an existing faculty member to the system." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 201', () => pm.response.to.have.status(201));"], "type": "text/javascript" } }] },
+            { "name": "Update Faculty Data", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/vacancy/faculty/:faculty_id", "host": ["{{base_url}}"], "path": ["vacancy", "faculty", ":faculty_id"], "variable": [{ "key": "faculty_id", "value": "fac_001" }] }, "body": { "mode": "raw", "raw": "{\n  \"designation\": \"Professor\",\n  \"experience_years\": 12\n}" }, "description": "Update existing faculty member details." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Get Faculty List", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/vacancy/faculty?institution_id=inst_001", "host": ["{{base_url}}"], "path": ["vacancy", "faculty"], "query": [{ "key": "institution_id", "value": "inst_001" }] }, "description": "Get list of all existing faculty members." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Calculate Vacancies", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/vacancy/calculate", "host": ["{{base_url}}"], "path": ["vacancy", "calculate"] }, "body": { "mode": "raw", "raw": "{\n  \"institution_id\": \"inst_001\",\n  \"academic_year\": \"2025-26\"\n}" }, "description": "Calculate total vacancies by comparing requirements vs existing faculty." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] }
+          ]
+        },
+        {
+          "name": "AI APIs",
+          "item": [
+            { "name": "Predict Vacancy", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/vacancy/ai/predict", "host": ["{{base_url}}"], "path": ["vacancy", "ai", "predict"] }, "body": { "mode": "raw", "raw": "{\n  \"institution_id\": \"inst_001\",\n  \"forecast_years\": 2\n}" }, "description": "AI predicts future vacancies based on historical trends." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Suggest Department Allocation", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/vacancy/ai/suggest-allocation", "host": ["{{base_url}}"], "path": ["vacancy", "ai", "suggest-allocation"] }, "body": { "mode": "raw", "raw": "{\n  \"institution_id\": \"inst_001\",\n  \"available_positions\": 10\n}" }, "description": "AI suggests optimal department-wise allocation of new positions." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Detect Anomalies", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/vacancy/ai/detect-anomalies", "host": ["{{base_url}}"], "path": ["vacancy", "ai", "detect-anomalies"] }, "body": { "mode": "raw", "raw": "{\n  \"institution_id\": \"inst_001\"\n}" }, "description": "AI detects anomalies in faculty data." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "4. Advertisement Creation (Step 3)",
+      "item": [
+        {
+          "name": "Core APIs",
+          "item": [
+            { "name": "Create Advertisement", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/advertisements", "host": ["{{base_url}}"], "path": ["advertisements"] }, "body": { "mode": "raw", "raw": "{\n  \"institution_id\": \"inst_001\",\n  \"title\": \"Faculty Recruitment 2025-26\",\n  \"department\": \"Computer Science\",\n  \"positions\": 5,\n  \"designation\": \"Assistant Professor\",\n  \"qualification_required\": \"Ph.D / M.Tech\",\n  \"last_date\": \"2025-06-30\"\n}" }, "description": "Create a new faculty recruitment advertisement." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 201', () => pm.response.to.have.status(201));"], "type": "text/javascript" } }] },
+            { "name": "Update Advertisement", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/advertisements/:adv_id", "host": ["{{base_url}}"], "path": ["advertisements", ":adv_id"], "variable": [{ "key": "adv_id", "value": "adv_001" }] }, "body": { "mode": "raw", "raw": "{\n  \"last_date\": \"2025-07-15\",\n  \"positions\": 7\n}" }, "description": "Update an existing advertisement." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Publish Advertisement", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/advertisements/:adv_id/publish", "host": ["{{base_url}}"], "path": ["advertisements", ":adv_id", "publish"], "variable": [{ "key": "adv_id", "value": "adv_001" }] }, "body": { "mode": "raw", "raw": "{\n  \"channels\": [\"website\", \"newspaper\"],\n  \"publish_date\": \"2025-05-01\"\n}" }, "description": "Publish the advertisement to selected channels." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Get Advertisement", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/advertisements/:adv_id", "host": ["{{base_url}}"], "path": ["advertisements", ":adv_id"], "variable": [{ "key": "adv_id", "value": "adv_001" }] }, "description": "Retrieve advertisement details by ID." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Get All Advertisements", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/advertisements?institution_id=inst_001&status=published", "host": ["{{base_url}}"], "path": ["advertisements"], "query": [{ "key": "institution_id", "value": "inst_001" }, { "key": "status", "value": "published" }] }, "description": "List all advertisements with optional filters." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] }
+          ]
+        },
+        {
+          "name": "AI APIs",
+          "item": [
+            { "name": "Generate Advertisement (Auto)", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/advertisements/ai/generate", "host": ["{{base_url}}"], "path": ["advertisements", "ai", "generate"] }, "body": { "mode": "raw", "raw": "{\n  \"institution_id\": \"inst_001\",\n  \"vacancy_id\": \"vac_001\",\n  \"tone\": \"formal\",\n  \"language\": \"en\"\n}" }, "description": "AI auto-generates a complete advertisement from vacancy data." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Generate Bilingual Content", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/advertisements/ai/bilingual", "host": ["{{base_url}}"], "path": ["advertisements", "ai", "bilingual"] }, "body": { "mode": "raw", "raw": "{\n  \"adv_id\": \"adv_001\",\n  \"target_language\": \"hi\"\n}" }, "description": "AI generates bilingual advertisement content." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Optimize Wording", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/advertisements/ai/optimize-wording", "host": ["{{base_url}}"], "path": ["advertisements", "ai", "optimize-wording"] }, "body": { "mode": "raw", "raw": "{\n  \"adv_id\": \"adv_001\",\n  \"optimization_goal\": \"clarity\"\n}" }, "description": "AI optimizes advertisement wording for clarity and compliance." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] }
+          ]
+        }
+      ]
+    },
+
+    {
+      "name": "5. Candidate Profile (Step 4)",
+      "item": [
+        {
+          "name": "Profile Management",
+          "item": [
+            { "name": "Create Candidate", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/candidates", "host": ["{{base_url}}"], "path": ["candidates"] }, "body": { "mode": "raw", "raw": "{\n  \"name\": \"Rahul Verma\",\n  \"email\": \"rahul.verma@email.com\",\n  \"phone\": \"+91-9876543210\",\n  \"dob\": \"1990-05-15\",\n  \"gender\": \"male\",\n  \"category\": \"OBC\"\n}" }, "description": "Register a new candidate profile." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 201', () => pm.response.to.have.status(201));"], "type": "text/javascript" } }] },
+            { "name": "Update Candidate", "request": { "method": "PUT", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/candidates/:candidate_id", "host": ["{{base_url}}"], "path": ["candidates", ":candidate_id"], "variable": [{ "key": "candidate_id", "value": "cand_001" }] }, "body": { "mode": "raw", "raw": "{\n  \"phone\": \"+91-9999999999\"\n}" }, "description": "Update candidate profile information." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Get Candidate", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/candidates/:candidate_id", "host": ["{{base_url}}"], "path": ["candidates", ":candidate_id"], "variable": [{ "key": "candidate_id", "value": "cand_001" }] }, "description": "Retrieve candidate profile by ID." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Delete Candidate", "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/candidates/:candidate_id", "host": ["{{base_url}}"], "path": ["candidates", ":candidate_id"], "variable": [{ "key": "candidate_id", "value": "cand_001" }] }, "description": "Soft-delete a candidate profile." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] }
+          ]
+        },
+        {
+          "name": "AI APIs",
+          "item": [
+            { "name": "Resume Parsing", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/candidates/ai/parse-resume", "host": ["{{base_url}}"], "path": ["candidates", "ai", "parse-resume"] }, "body": { "mode": "raw", "raw": "{\n  \"candidate_id\": \"cand_001\",\n  \"document_id\": \"doc_resume_001\"\n}" }, "description": "AI parses resume and auto-fills candidate profile fields." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Skill Extraction", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/candidates/ai/extract-skills", "host": ["{{base_url}}"], "path": ["candidates", "ai", "extract-skills"] }, "body": { "mode": "raw", "raw": "{\n  \"candidate_id\": \"cand_001\"\n}" }, "description": "AI extracts and categorizes skills from candidate profile." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] },
+            { "name": "Eligibility Check", "request": { "method": "POST", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{base_url}}/candidates/ai/eligibility-check", "host": ["{{base_url}}"], "path": ["candidates", "ai", "eligibility-check"] }, "body": { "mode": "raw", "raw": "{\n  \"candidate_id\": \"cand_001\",\n  \"adv_id\": \"adv_001\"\n}" }, "description": "AI checks candidate eligibility against advertisement requirements." }, "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }] }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "6. Application Management (Step 4)",
+      "description": "Matches actual backend routes in /api/applications. Upload Documents uses multipart/form-data as required by the FastAPI endpoint.",
+      "item": [
+        {
+          "name": "Core APIs",
+          "item": [
+            {
+              "name": "Create Application",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{token}}" }
+                ],
+                "url": { "raw": "{{base_url}}/applications", "host": ["{{base_url}}"], "path": ["applications"] },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"advertisement_id\": \"{{advertisement_id}}\",\n  \"applied_designation\": \"Assistant Professor\"\n}"
+                },
+                "description": "Create a new application (DRAFT status). Requires CANDIDATE role.\n\nFields:\n- advertisement_id (UUID, required) — ID of the published advertisement\n- applied_designation (string, required) — e.g. 'Assistant Professor'"
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status is 201', () => pm.response.to.have.status(201));",
+                      "pm.test('Application ID saved', () => {",
+                      "  const json = pm.response.json();",
+                      "  if (json.data && json.data.id) pm.environment.set('application_id', json.data.id);",
+                      "});"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "Upload Document",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Authorization", "value": "Bearer {{token}}" }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/applications/:application_id/documents",
+                  "host": ["{{base_url}}"],
+                  "path": ["applications", ":application_id", "documents"],
+                  "variable": [{ "key": "application_id", "value": "{{application_id}}", "description": "UUID of the application (must be in DRAFT status)" }]
+                },
+                "body": {
+                  "mode": "formdata",
+                  "formdata": [
+                    {
+                      "key": "document_type",
+                      "value": "DEGREE_CERTIFICATE",
+                      "type": "text",
+                      "description": "One of: PHOTO | SIGNATURE | AADHAR | PAN | DEGREE_CERTIFICATE | MARKSHEET | EXPERIENCE_LETTER | CASTE_CERTIFICATE | NOC | PUBLICATION_PROOF | OTHER"
+                    },
+                    {
+                      "key": "file",
+                      "type": "file",
+                      "src": [],
+                      "description": "Accepted formats: PDF, JPEG, PNG, TIFF. Max size: 2 MB."
+                    }
+                  ]
+                },
+                "description": "Upload a document for an application.\n\n⚠️ This endpoint uses multipart/form-data — NOT JSON.\n\nForm fields:\n- document_type (text, required): One of PHOTO, SIGNATURE, AADHAR, PAN, DEGREE_CERTIFICATE, MARKSHEET, EXPERIENCE_LETTER, CASTE_CERTIFICATE, NOC, PUBLICATION_PROOF, OTHER\n- file (file, required): PDF / JPEG / PNG / TIFF, max 2 MB\n\nRequired documents for submission: PHOTO, SIGNATURE, AADHAR, DEGREE_CERTIFICATE, MARKSHEET\n\nRole: CANDIDATE only. Application must be in DRAFT status."
+              },
+              "event": [
+                {
+                  "listen": "test",
+                  "script": {
+                    "exec": [
+                      "pm.test('Status is 200', () => pm.response.to.have.status(200));",
+                      "pm.test('Document uploaded', () => {",
+                      "  const json = pm.response.json();",
+                      "  pm.expect(json.data).to.have.property('id');",
+                      "  pm.expect(json.data).to.have.property('document_type');",
+                      "  pm.expect(json.data).to.have.property('validation_status');",
+                      "});"
+                    ],
+                    "type": "text/javascript"
+                  }
+                }
+              ]
+            },
+            {
+              "name": "List Documents",
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+                "url": {
+                  "raw": "{{base_url}}/applications/:application_id/documents",
+                  "host": ["{{base_url}}"],
+                  "path": ["applications", ":application_id", "documents"],
+                  "variable": [{ "key": "application_id", "value": "{{application_id}}" }]
+                },
+                "description": "List all uploaded documents for an application.\n\nRole: CANDIDATE (own application) or PRINCIPAL (institution scope).\n\nReturns: id, document_type, file_name, file_size_kb, mime_type, validation_status, validation_message, uploaded_at, validated_at"
+              },
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));", "pm.test('Returns array', () => pm.expect(pm.response.json().data).to.be.an('array'));"], "type": "text/javascript" } }]
+            },
+            {
+              "name": "Submit Application",
+              "request": {
+                "method": "POST",
+                "header": [
+                  { "key": "Content-Type", "value": "application/json" },
+                  { "key": "Authorization", "value": "Bearer {{token}}" }
+                ],
+                "url": {
+                  "raw": "{{base_url}}/applications/:application_id/submit",
+                  "host": ["{{base_url}}"],
+                  "path": ["applications", ":application_id", "submit"],
+                  "variable": [{ "key": "application_id", "value": "{{application_id}}" }]
+                },
+                "body": {
+                  "mode": "raw",
+                  "raw": "{\n  \"declaration_accepted\": true\n}"
+                },
+                "description": "Submit a DRAFT application. All required documents (PHOTO, SIGNATURE, AADHAR, DEGREE_CERTIFICATE, MARKSHEET) must be uploaded and valid.\n\nFields:\n- declaration_accepted (boolean, required): Must be true"
+              },
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));", "pm.test('Status is SUBMITTED', () => pm.expect(pm.response.json().data.status).to.equal('SUBMITTED'));"], "type": "text/javascript" } }]
+            },
+            {
+              "name": "Withdraw Application",
+              "request": {
+                "method": "DELETE",
+                "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+                "url": {
+                  "raw": "{{base_url}}/applications/:application_id/withdraw",
+                  "host": ["{{base_url}}"],
+                  "path": ["applications", ":application_id", "withdraw"],
+                  "variable": [{ "key": "application_id", "value": "{{application_id}}" }]
+                },
+                "description": "Withdraw a DRAFT or SUBMITTED application. Role: CANDIDATE only."
+              },
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }]
+            },
+            {
+              "name": "Get My Applications",
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+                "url": {
+                  "raw": "{{base_url}}/applications/my?skip=0&limit=10",
+                  "host": ["{{base_url}}"],
+                  "path": ["applications", "my"],
+                  "query": [{ "key": "skip", "value": "0" }, { "key": "limit", "value": "10" }]
+                },
+                "description": "List all applications submitted by the logged-in candidate. Role: CANDIDATE only."
+              },
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }]
+            },
+            {
+              "name": "List All Applications (Admin/Principal)",
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+                "url": {
+                  "raw": "{{base_url}}/applications?advertisement_id={{advertisement_id}}&status=SUBMITTED&skip=0&limit=20",
+                  "host": ["{{base_url}}"],
+                  "path": ["applications"],
+                  "query": [
+                    { "key": "advertisement_id", "value": "{{advertisement_id}}", "description": "Filter by advertisement UUID" },
+                    { "key": "status", "value": "SUBMITTED", "description": "DRAFT | SUBMITTED | WITHDRAWN | SHORTLISTED | REJECTED" },
+                    { "key": "course_id", "value": "", "description": "Filter by course ID (integer)", "disabled": true },
+                    { "key": "academic_year", "value": "", "description": "e.g. 2025-26", "disabled": true },
+                    { "key": "skip", "value": "0" },
+                    { "key": "limit", "value": "20" }
+                  ]
+                },
+                "description": "List all applications with document validation counts. Role: PRINCIPAL (institution-scoped) or ADMIN."
+              },
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));"], "type": "text/javascript" } }]
+            }
+          ]
+        },
+        {
+          "name": "AI APIs",
+          "item": [
+            {
+              "name": "Get AI Summary",
+              "request": {
+                "method": "GET",
+                "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+                "url": {
+                  "raw": "{{base_url}}/applications/:application_id/ai-summary",
+                  "host": ["{{base_url}}"],
+                  "path": ["applications", ":application_id", "ai-summary"],
+                  "variable": [{ "key": "application_id", "value": "{{application_id}}" }]
+                },
+                "description": "Returns AI document scrutiny summary for an application.\n\nRole: PRINCIPAL or ADMIN only.\n\nReturns: ai_status, scrutiny_summary, issues[], confidence_score"
+              },
+              "event": [{ "listen": "test", "script": { "exec": ["pm.test('Status is 200', () => pm.response.to.have.status(200));", "pm.test('Has confidence score', () => pm.expect(pm.response.json().data.confidence_score).to.be.a('number'));"], "type": "text/javascript" } }]
+            },
+            {
+  

@@ -39,7 +39,6 @@ from app.models.payment_transaction import PaymentTransaction, PaymentMode, Paym
 
 # Step 5 Models
 from .scoring_weight_config import ScoringWeightConfig
-from .selection_round import SelectionRound, SelectionRoundType, SelectionRoundStatus
 from .shortlisted_candidate import ShortlistedCandidate
 from .interview_marks import InterviewMarks
 from .candidate_score import CandidateScore
@@ -108,9 +107,7 @@ __all__ = [
     "CandidateQualification",
     "CandidateExperience",
     "ScoringWeightConfig",
-    "SelectionRound",
-    "SelectionRoundType",
-    "SelectionRoundStatus",
+
     "ShortlistedCandidate",
     "InterviewMarks",
     "CandidateScore",

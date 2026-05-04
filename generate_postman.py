@@ -45,16 +45,24 @@ def generate_postman_collection():
             for prop, details in schema.get("properties", {}).items():
                 if "$ref" in details:
                     example[prop] = resolve_schema(details, is_response)
+                elif "anyOf" in details:
+                    valid_anyof = [d for d in details["anyOf"] if d.get("type") and d.get("type") != "null"]
+                    if valid_anyof:
+                        example[prop] = resolve_schema({"properties": {"tmp": valid_anyof[0]}, "type": "object"}, is_response)["tmp"]
+                    else:
+                        example[prop] = None
                 elif details.get("type") == "array":
                     items = details.get("items", {})
                     example[prop] = [resolve_schema(items, is_response)]
                 else:
                     # Default values for types
                     t = details.get("type")
+                    fmt = details.get("format")
                     if t == "string":
                         # Better examples for frontend
                         if "email" in prop: example[prop] = "user@example.com"
-                        elif "date" in prop: example[prop] = "2026-05-01"
+                        elif "date" in prop or fmt == "date": example[prop] = "2026-05-01"
+                        elif fmt == "date-time": example[prop] = "2026-05-01T10:00:00Z"
                         elif "token" in prop: example[prop] = "eyJhbGciOiJIUzI1Ni..."
                         elif "id" in prop and t == "string": example[prop] = str(uuid.uuid4())
                         else: example[prop] = details.get("example", "string")

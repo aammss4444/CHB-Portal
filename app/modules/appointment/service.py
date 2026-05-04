@@ -22,7 +22,7 @@ from app.models.candidate import Candidate
 from app.models.faculty_credentials import FacultyCredentials
 from app.models.institution import Course, Institution
 from app.models.selection_result import SelectionResult, SelectionResultStatus, FinalResultStatus
-from app.models.selection_round import SelectionRound
+
 from app.models.user import RoleEnum, User
 from app.modules.appointment.appointment_engine import AppointmentRenderError, generate_pdf, render_appointment_letter
 from app.modules.appointment.schemas import (
@@ -228,11 +228,10 @@ class AppointmentService:
             await db.execute(
                 select(
                     SelectionResult,
-                    SelectionRound.advertisement_id,
+                    SelectionResult.advertisement_id,
                     Institution.name.label("institution_name"),
                     Course.name.label("course_name"),
                 )
-                .join(SelectionRound, SelectionRound.id == SelectionResult.round_id)
                 .join(Institution, Institution.id == SelectionResult.institution_id)
                 .join(Course, Course.id == SelectionResult.course_id)
                 .where(SelectionResult.id == req.selection_result_id)
@@ -790,8 +789,7 @@ class AppointmentService:
                 actor_id = first_user.id
         base_row = (
             await db.execute(
-                select(SelectionResult, SelectionRound.advertisement_id)
-                .join(SelectionRound, SelectionRound.id == SelectionResult.round_id)
+                select(SelectionResult, SelectionResult.advertisement_id)
                 .where(SelectionResult.id == declined.selection_result_id)
             )
         ).first()

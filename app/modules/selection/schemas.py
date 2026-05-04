@@ -5,11 +5,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field
 
-class SelectionRoundCreateRequest(BaseModel):
-    advertisement_id: UUID
-    round_type: str # DOCUMENT_SCRUTINY, INTERVIEW
-    scheduled_date: date
-
 class ShortlistRequest(BaseModel):
     application_ids: List[UUID]
     remarks: Optional[str] = None
@@ -22,7 +17,7 @@ class AttendanceRequest(BaseModel):
     attendance: List[AttendanceItem]
 
 class InterviewMarksRequest(BaseModel):
-    round_id: UUID
+    advertisement_id: UUID
     application_id: UUID
     candidate_id: UUID
     institution_id: int

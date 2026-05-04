@@ -19,7 +19,7 @@ class SelectionResult(Base):
     __tablename__ = "selection_results"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    round_id = Column(UUID(as_uuid=True), ForeignKey("selection_rounds.id"), nullable=False)
+    advertisement_id = Column(UUID(as_uuid=True), ForeignKey("advertisements.id"), nullable=False)
     application_id = Column(UUID(as_uuid=True), ForeignKey("applications.id"), nullable=False)
     candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
     institution_id = Column(Integer, ForeignKey("institutions.id"), nullable=False)
@@ -39,8 +39,7 @@ class SelectionResult(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
-        UniqueConstraint('round_id', 'candidate_id', name='_sel_result_round_cand_uc'),
+        UniqueConstraint('advertisement_id', 'candidate_id', name='_sel_result_ad_cand_uc'),
     )
 
-    round = relationship("SelectionRound")
     application = relationship("Application")

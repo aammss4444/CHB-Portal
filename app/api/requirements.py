@@ -2,7 +2,7 @@ import math
 import logging
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete, text, func
+from sqlalchemy import select, delete, text, func, update
 from sqlalchemy.orm import selectinload
 from typing import List, Optional, Any, Dict
 
@@ -52,6 +52,7 @@ from app.modules.requirements.norms_service import derive_course_category
 from app.core.config import settings
 from app.services.llm_service import llm_service
 from app.modules.vacancy.controller import VacancyController
+from app.models.vacancy_assessment import VacancyAssessment
 
 # Instantiate AI components
 ai_engine = RequirementAIEngine()
@@ -940,6 +941,24 @@ async def generate_requirements(gen_req: GenerateRequirementRequest, db: AsyncSe
 
             req = FacultyRequirement(intake_id=intake.id, computed_required_count=required, formula_breakdown=formula_json)
             db.add(req)
+            await db.commit()
+
+            # Step 1 changed: unlock Step 2 so Principal can reassess and reconfirm.
+            await db.execute(
+                update(VacancyAssessment)
+                .where(
+                    VacancyAssessment.institution_id == gen_req.institution_id,
+                    VacancyAssessment.course_id == intake.course_id,
+                    VacancyAssessment.academic_year == gen_req.academic_year,
+                )
+                .values(
+                    status="DRAFT",
+                    confirmed_vacancy=None,
+                    confirmed_by=None,
+                    confirmed_at=None,
+                    requirement_id=req.id,
+                )
+            )
             await db.commit()
 
             await log_audit(db, "FacultyRequirement", req.id, "GENERATE", current_user.id, formula_json)

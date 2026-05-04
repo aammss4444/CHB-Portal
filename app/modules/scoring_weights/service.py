@@ -183,10 +183,7 @@ class ScoringWeightService:
                 select(Advertisement.id).where(Advertisement.id == advertisement_id).scalar_subquery()
             )
         )
-        # Wait, the check in spec: "if candidate_scores exists for this advertisement"
-        # Since candidate_scores links to round_id, and round_id links to advertisement_id
-        from app.models.selection_round import SelectionRound
-        stmt_check = select(CandidateScore).join(SelectionRound).where(SelectionRound.advertisement_id == advertisement_id)
+        stmt_check = select(CandidateScore).where(CandidateScore.advertisement_id == advertisement_id)
         exists = (await db.execute(stmt_check)).scalars().first()
         if exists:
             self._raise_error(403, "RANKING_ALREADY_GENERATED", "Ranking already generated. Weights cannot be changed.")
@@ -244,8 +241,7 @@ class ScoringWeightService:
             self._raise_error(403, "CANNOT_DELETE_DEFAULT_CONFIG", "Default global config cannot be deleted")
             
         # Check if used
-        stmt_used = select(CandidateScore).join(SelectionRound).where(SelectionRound.advertisement_id == config.advertisement_id)
-        # This is a bit complex since scores might not store config_id (they store snapshot).
+        stmt_used = select(CandidateScore).where(CandidateScore.advertisement_id == config.advertisement_id)
         # Spec says "Cannot delete config already used in a completed ranking"
         # We'll just check if there are any completed rounds for the ad/course/level.
         # For simplicity, we'll just check if it's currently active and not default.

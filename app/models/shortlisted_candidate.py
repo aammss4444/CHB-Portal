@@ -9,7 +9,7 @@ class ShortlistedCandidate(Base):
     __tablename__ = "shortlisted_candidates"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    round_id = Column(UUID(as_uuid=True), ForeignKey("selection_rounds.id"), nullable=False)
+    advertisement_id = Column(UUID(as_uuid=True), ForeignKey("advertisements.id"), nullable=False)
     application_id = Column(UUID(as_uuid=True), ForeignKey("applications.id"), nullable=False)
     candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
     
@@ -20,9 +20,8 @@ class ShortlistedCandidate(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
-        UniqueConstraint('round_id', 'application_id', name='_shortlist_round_app_uc'),
+        UniqueConstraint('advertisement_id', 'application_id', name='_shortlist_ad_app_uc'),
     )
 
-    round = relationship("SelectionRound", back_populates="shortlisted_candidates")
     application = relationship("Application")
     candidate = relationship("Candidate")

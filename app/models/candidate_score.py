@@ -9,7 +9,7 @@ class CandidateScore(Base):
     __tablename__ = "candidate_scores"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    round_id = Column(UUID(as_uuid=True), ForeignKey("selection_rounds.id"), nullable=False)
+    advertisement_id = Column(UUID(as_uuid=True), ForeignKey("advertisements.id"), nullable=False)
     application_id = Column(UUID(as_uuid=True), ForeignKey("applications.id"), nullable=False)
     candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
     institution_id = Column(Integer, ForeignKey("institutions.id"), nullable=False)
@@ -27,9 +27,8 @@ class CandidateScore(Base):
     computed_at = Column(DateTime(timezone=True), server_default=func.now())
 
     __table_args__ = (
-        UniqueConstraint('round_id', 'application_id', name='_cand_score_round_app_uc'),
+        UniqueConstraint('advertisement_id', 'application_id', name='_cand_score_ad_app_uc'),
     )
 
-    round = relationship("SelectionRound")
     application = relationship("Application")
     candidate = relationship("Candidate")

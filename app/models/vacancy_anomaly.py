@@ -10,7 +10,8 @@ class VacancyAnomaly(Base):
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     assessment_id = Column(UUID(as_uuid=True), ForeignKey("vacancy_assessments.id"), nullable=True)
-    round_id = Column(UUID(as_uuid=True), ForeignKey("selection_rounds.id"), nullable=True)
+    advertisement_id = Column(UUID(as_uuid=True), ForeignKey("advertisements.id"), nullable=True)
+    institution_id = Column(Integer, ForeignKey("institutions.id"), nullable=False)
     faculty_id = Column(UUID(as_uuid=True), ForeignKey("existing_faculty.id"), nullable=True)
     
     anomaly_type = Column(String(100), nullable=False) # e.g., HIGH_VACANCY_RATIO

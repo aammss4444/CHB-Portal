@@ -78,8 +78,8 @@ async def amain():
     ad_id, app_id, course_id, level = await get_test_data()
     
     with httpx.Client(timeout=40.0) as client:
-        admin_token = login(client, "admin@chb.local", "Admin@123")
-        principal_token = login(client, "principal@chb.local", "Principal@123")
+        admin_token = login(client, "s.admin@gmail.com", "1234")
+        principal_token = login(client, "principal@gmail.com", "1234")
         
         admin_headers = {"Authorization": f"Bearer {admin_token}"}
         principal_headers = {"Authorization": f"Bearer {principal_token}"}
@@ -152,17 +152,17 @@ async def amain():
             }
         ))
 
-        # 5) Mark Attendance
-        print("5) POST /selection/rounds/{id}/attendance")
-        expect_envelope(client.post(
-            f"{BASE_URL}/api/selection/rounds/{round_id}/attendance",
-            headers=principal_headers,
-            json={
-                "attendance": [
-                    {"application_id": str(app_id), "is_present": True}
-                ]
-            }
-        ))
+        # 5) Mark Attendance (SKIPPED TO VERIFY BYPASS)
+        print("5) POST /selection/rounds/{id}/attendance (SKIPPED)")
+        # expect_envelope(client.post(
+        #     f"{BASE_URL}/api/selection/rounds/{round_id}/attendance",
+        #     headers=principal_headers,
+        #     json={
+        #         "attendance": [
+        #             {"application_id": str(app_id), "is_present": True}
+        #         ]
+        #     }
+        # ))
 
         # 6) Enter Marks for ALL present candidates
         print("6) POST /selection/marks (All present candidates)")
@@ -170,7 +170,7 @@ async def amain():
             from app.models.shortlisted_candidate import ShortlistedCandidate
             from app.models.application import Application
             sc_stmt = select(ShortlistedCandidate).where(
-                and_(ShortlistedCandidate.round_id == round_id, ShortlistedCandidate.is_present == True)
+                ShortlistedCandidate.round_id == round_id
             )
             scs = (await db.execute(sc_stmt)).scalars().all()
             

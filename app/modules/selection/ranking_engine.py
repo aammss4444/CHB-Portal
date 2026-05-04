@@ -24,7 +24,7 @@ class RankedCandidate(BaseModel):
     anomalies: List[Dict[str, str]] = []
 
 def compute_candidate_rankings(
-    round_id: UUID,
+    advertisement_id: UUID,
     candidates: List[CandidateRankingInput],
     vacancy_count: int,
     weights: Any # ScoringWeightConfig-like object or dict

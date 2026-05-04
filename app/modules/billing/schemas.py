@@ -7,11 +7,12 @@ from typing import Optional
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
+from app.models.rate_master import CHBDesignation, RateLectureType
 
 
 class RateCreateItem(BaseModel):
-    designation: str
-    lecture_type: str
+    designation: CHBDesignation
+    lecture_type: RateLectureType
     rate_per_lecture: Decimal = Field(..., gt=0)
     effective_from: date
     effective_to: Optional[date] = None

@@ -9,7 +9,7 @@ class InterviewMarks(Base):
     __tablename__ = "interview_marks"
 
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    round_id = Column(UUID(as_uuid=True), ForeignKey("selection_rounds.id"), nullable=False)
+    advertisement_id = Column(UUID(as_uuid=True), ForeignKey("advertisements.id"), nullable=False)
     application_id = Column(UUID(as_uuid=True), ForeignKey("applications.id"), nullable=False)
     candidate_id = Column(UUID(as_uuid=True), ForeignKey("candidates.id"), nullable=False)
     institution_id = Column(Integer, ForeignKey("institutions.id"), nullable=False)
@@ -26,8 +26,7 @@ class InterviewMarks(Base):
     is_locked = Column(Boolean, default=False)
 
     __table_args__ = (
-        UniqueConstraint('round_id', 'application_id', name='_int_marks_round_app_uc'),
+        UniqueConstraint('advertisement_id', 'application_id', name='_int_marks_ad_app_uc'),
     )
 
-    round = relationship("SelectionRound")
     application = relationship("Application")
