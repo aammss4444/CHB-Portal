@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     LLM_TIMEOUT_SECONDS: int = 60
     ALLOW_MOCK_HISTORY: bool = False
     ALLOW_OCR_SIMULATION: bool = False
+    OCR_SPACE_API_KEY: str = ""
     CORS_ORIGINS: str = "http://localhost:5173"
 
     model_config = {

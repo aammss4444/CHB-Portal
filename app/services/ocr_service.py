@@ -1,54 +1,56 @@
 import logging
 import os
 import asyncio
+import httpx
 from typing import Optional
 
 from app.core.config import settings
 logger = logging.getLogger(__name__)
 
-# Attempt to import pytesseract
-try:
-    import pytesseract
-    from PIL import Image
-    TESSERACT_AVAILABLE = True
-except ImportError:
-    TESSERACT_AVAILABLE = False
-
-try:
-    from pdf2image import convert_from_path  # type: ignore
-    PDF2IMAGE_AVAILABLE = True
-except Exception:
-    PDF2IMAGE_AVAILABLE = False
-
-
-def _ocr_image_sync(path: str) -> str:
-    return pytesseract.image_to_string(Image.open(path))  # type: ignore[name-defined]
-
 async def extract_text(file_path: str) -> str:
     """
-    Extracts text from an image or PDF.
-    If Tesseract is not available, returns a simulated text based on filename 
-    to facilitate pipeline testing.
+    Extracts text from an image or PDF using OCR.space API.
+    If the API call fails or is unavailable, and simulation is enabled,
+    returns simulated text.
     """
     if not os.path.exists(file_path):
         logger.error(f"File not found for OCR: {file_path}")
         return ""
 
-    if TESSERACT_AVAILABLE:
+    # Attempt OCR.space API
+    if settings.OCR_SPACE_API_KEY:
         try:
-            ext = os.path.splitext(file_path)[1].lower()
-            if ext == ".pdf" and PDF2IMAGE_AVAILABLE:
-                pages = await asyncio.to_thread(convert_from_path, file_path, first_page=1, last_page=3)
-                chunks = []
-                for page in pages:
-                    chunks.append(await asyncio.to_thread(pytesseract.image_to_string, page))
-                text = "\n".join(chunks)
-            else:
-                text = await asyncio.to_thread(_ocr_image_sync, file_path)
-            return text.strip()
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                with open(file_path, 'rb') as f:
+                    files = {'file': f}
+                    data = {
+                        'apikey': settings.OCR_SPACE_API_KEY,
+                        'language': 'eng',
+                        'isOverlayRequired': False,
+                        'filetype': os.path.splitext(file_path)[1].lower().replace('.', '')
+                    }
+                    
+                    logger.info(f"Calling OCR.space API for file: {file_path}")
+                    response = await client.post(
+                        'https://api.ocr.space/parse/image',
+                        files=files,
+                        data=data
+                    )
+                    
+                    if response.status_code == 200:
+                        result = response.json()
+                        if result.get('IsErroredOnProcessing'):
+                            logger.error(f"OCR.space Error: {result.get('ErrorMessage')}")
+                        else:
+                            parsed_results = result.get('ParsedResults', [])
+                            if parsed_results:
+                                text = parsed_results[0].get('ParsedText', '')
+                                return text.strip()
+                    else:
+                        logger.error(f"OCR.space API HTTP Error: {response.status_code}")
         except Exception as e:
-            logger.warning("Tesseract OCR failed: %s", str(e))
-    
+            logger.warning(f"OCR.space API call failed: {str(e)}")
+
     if not settings.ALLOW_OCR_SIMULATION:
         logger.error("OCR extraction unavailable and simulation is disabled for file: %s", file_path)
         return ""
