@@ -38,3 +38,8 @@ class CandidateController:
         data = await self.service.add_experience(db, current_user, req)
         payload = [CandidateExperienceResponse.model_validate(item, from_attributes=True).model_dump() for item in data]
         return {"status": "success", "data": payload}
+
+    async def get_profile_by_id(self, db: AsyncSession, candidate_id: str):
+        data = await self.service.get_profile_by_candidate_id(db, candidate_id)
+        payload = CandidateProfileResponse.model_validate(data, from_attributes=True).model_dump()
+        return {"status": "success", "data": payload}

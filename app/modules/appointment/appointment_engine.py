@@ -14,7 +14,9 @@ class AppointmentRenderError(Exception):
 def render_appointment_letter(template_body: str, context: dict) -> str:
     rendered = template_body
     for key, value in context.items():
-        rendered = rendered.replace(f"{{{{{key}}}}}", str(value))
+        # Handle both {{key}} and {{ key }}
+        pattern = re.compile(r"\{\{\s*" + re.escape(key) + r"\s*\}\}")
+        rendered = pattern.sub(str(value), rendered)
 
     leftovers = re.findall(r"\{\{.*?\}\}", rendered)
     if leftovers:

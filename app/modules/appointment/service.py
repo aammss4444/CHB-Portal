@@ -147,16 +147,7 @@ class AppointmentService:
         ).scalars().all()
 
     def _ensure_date_rules(self, joining_date: date, acceptance_deadline: date, require_future_joining: bool = True) -> None:
-        today = date.today()
-        from app.core.config import settings
-        min_date = today + timedelta(days=settings.MIN_JOINING_DAYS)
-        
-        if require_future_joining and joining_date < min_date:
-            self._raise_error(
-                400, 
-                "INVALID_DATE_RANGE", 
-                f"joining_date must be at least {settings.MIN_JOINING_DAYS} days from today (min: {min_date})"
-            )
+        """Allow any joining date (including backdated) as long as deadline is not after joining."""
         if acceptance_deadline > joining_date:
             self._raise_error(400, "INVALID_DATE_RANGE", "acceptance_deadline must be before or on joining_date")
 
@@ -277,6 +268,7 @@ class AppointmentService:
             "appointment_number": appointment_number,
             "principal_name": current_user.full_name or "Principal",
             "issue_date": self._format_date(date.today()),
+            "acceptance_deadline": self._format_date(req.acceptance_deadline),
         }
         try:
             content_en = render_appointment_letter(tpl_en.template_body, context)
@@ -366,9 +358,38 @@ class AppointmentService:
         if current_user.role == RoleEnum.CANDIDATE:
             payload["download_url"] = await get_file_url(letter.file_path) if letter.file_path else None
             payload["file_path"] = None
+            
+            # If accepted, show credentials
+            if letter.status == AppointmentLetterStatus.ACCEPTED.value:
+                creds = (
+                    await db.execute(
+                        select(FacultyCredentials).where(FacultyCredentials.appointment_letter_id == letter.id)
+                    )
+                ).scalars().first()
+                if creds:
+                    payload["credentials"] = {
+                        "username": creds.portal_username,
+                        "password": creds.temp_password_plain,
+                        "faculty_code": creds.faculty_code,
+                        "issued_at": creds.credential_issued_at
+                    }
         else:
             payload["file_path"] = letter.file_path
             payload["download_url"] = await get_file_url(letter.file_path) if letter.file_path else None
+            
+            # Principal can also see if credentials were issued (but maybe not the password)
+            creds = (
+                await db.execute(
+                    select(FacultyCredentials).where(FacultyCredentials.appointment_letter_id == letter.id)
+                )
+            ).scalars().first()
+            if creds:
+                payload["credentials"] = {
+                    "username": creds.portal_username,
+                    "faculty_code": creds.faculty_code,
+                    "issued_at": creds.credential_issued_at,
+                    "is_active": creds.is_active
+                }
 
         return payload
 
@@ -424,23 +445,40 @@ class AppointmentService:
         await db.commit()
         return letter
 
-    async def submit_letter(self, db: AsyncSession, current_user: User, appointment_id: UUID) -> AppointmentLetter:
+    async def submit_letter_directly(self, db: AsyncSession, current_user: User, appointment_id: UUID) -> AppointmentLetter:
         letter = await self._get_letter_or_404(db, appointment_id)
         await self._assert_institution_access(letter.institution_id, current_user)
 
         if self._status_value(letter) not in {AppointmentLetterStatus.DRAFT.value, AppointmentLetterStatus.REJECTED.value}:
             self._raise_error(400, "INVALID_STATUS_TRANSITION", "Only DRAFT or REJECTED letters can be submitted")
 
-        if letter.joining_date < date.today():
-            self._raise_error(400, "INVALID_DATE_RANGE", "joining_date cannot be in the past")
         if not letter.content_en.strip() or not letter.content_mr.strip():
             self._raise_error(400, "INVALID_STATUS_TRANSITION", "content_en and content_mr must not be empty")
         self._ensure_date_rules(letter.joining_date, letter.acceptance_deadline, require_future_joining=False)
 
-        letter.status = AppointmentLetterStatus.PENDING_APPROVAL.value
+        # Generate PDF and finalize
+        pdf_bytes = generate_pdf(letter.content_en, letter.appointment_number)
+        encrypted_pdf = encrypt_bytes(pdf_bytes)
+        file_path = f"appointments/{letter.institution_id}/{letter.academic_year}/{letter.appointment_number}.pdf"
+        stored_path = await save_bytes_file(encrypted_pdf, file_path)
+
+        letter.file_path = stored_path
+        letter.status = AppointmentLetterStatus.ISSUED.value
+        letter.issued_by = current_user.id
+        letter.issued_at = datetime.utcnow()
+        
         await self._write_audit(
-            db, letter.id, AppointmentAuditAction.SUBMITTED, current_user.id, new_value={"status": letter.status}
+            db, 
+            letter.id, 
+            AppointmentAuditAction.SUBMITTED, 
+            current_user.id, 
+            new_value={"status": letter.status, "file_path": letter.file_path}
         )
+        
+        # Notify candidate immediately
+        candidate = await self._get_candidate_or_404(db, letter.candidate_id)
+        await notify_letter_issued(candidate, letter)
+        
         await db.commit()
         return letter
 
@@ -535,8 +573,7 @@ class AppointmentService:
         if not candidate or candidate.id != letter.candidate_id:
             self._raise_error(403, "UNAUTHORIZED_INSTITUTION", "You can respond only to your own appointment letter")
 
-        if letter.acceptance_deadline and date.today() > letter.acceptance_deadline:
-            self._raise_error(400, "ACCEPTANCE_DEADLINE_PASSED", "Acceptance deadline has passed")
+        # Acceptance deadline check removed to allow backdated acceptance
 
         existing_response = (
             await db.execute(
@@ -664,6 +701,7 @@ class AppointmentService:
                     AppointmentLetter.status,
                     Course.name.label("Course"),
                     AppointmentLetter.joining_date,
+                    AppointmentLetter.candidate_id,
                     FacultyCredentials.id.label("credential_id"),
                 )
                 .join(Candidate, Candidate.id == AppointmentLetter.candidate_id)
@@ -686,11 +724,42 @@ class AppointmentService:
                 "status": row["status"],
                 "Course": row["Course"],
                 "joining_date": row["joining_date"],
+                "candidate_id": str(row["candidate_id"]),
                 "credentials_issued": bool(row["credential_id"]),
             }
             for row in rows
         ]
         return {"total": int(total or 0), "page": page, "size": size, "items": items}
+
+    async def list_candidate_letters(self, db: AsyncSession, current_user: User) -> list[dict[str, Any]]:
+        candidate = (
+            await db.execute(select(Candidate).where(Candidate.user_id == current_user.id))
+        ).scalars().first()
+        if not candidate:
+            return []
+
+        rows = (
+            await db.execute(
+                select(
+                    AppointmentLetter.id,
+                    AppointmentLetter.appointment_number,
+                    Institution.name.label("institution_name"),
+                    AppointmentLetter.status,
+                    Course.name.label("course_name"),
+                    AppointmentLetter.joining_date,
+                    AppointmentLetter.issued_at,
+                )
+                .join(Institution, Institution.id == AppointmentLetter.institution_id)
+                .join(Course, Course.id == AppointmentLetter.course_id)
+                .where(and_(
+                    AppointmentLetter.candidate_id == candidate.id,
+                    AppointmentLetter.status != AppointmentLetterStatus.DRAFT.value
+                ))
+                .order_by(AppointmentLetter.issued_at.desc())
+            )
+        ).mappings().all()
+
+        return [dict(row) for row in rows]
 
     async def issue_credentials(
         self, appointment_letter_id: UUID, candidate_id: UUID, institution_id: int, db: AsyncSession
@@ -766,6 +835,7 @@ class AppointmentService:
             faculty_code=faculty_code,
             portal_username=portal_username,
             temp_password_hash=temp_password_hash,
+            temp_password_plain=temp_password,
             credential_issued_at=datetime.utcnow(),
             is_active=True,
         )
@@ -807,10 +877,9 @@ class AppointmentService:
         waitlist_rows = (
             await db.execute(
                 select(SelectionResult)
-                .join(SelectionRound, SelectionRound.id == SelectionResult.round_id)
                 .where(
                     and_(
-                        SelectionRound.advertisement_id == advertisement_id,
+                        SelectionResult.advertisement_id == advertisement_id,
                         SelectionResult.result_status == SelectionResultStatus.WAITLISTED.value,
                         SelectionResult.status == FinalResultStatus.CONFIRMED.value,
                     )

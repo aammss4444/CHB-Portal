@@ -19,6 +19,7 @@ from app.modules.attendance.router import router as attendance_router
 from app.modules.billing.router import router as billing_router
 from app.modules.payments.router import router as payments_router
 from app.modules.audit.router import router as audit_router
+from app.modules.principal.router import router as principal_router
 from app.modules.helpdesk.router import router as helpdesk_router
 from app.core.config import settings
 
@@ -175,6 +176,7 @@ app.include_router(attendance_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
 app.include_router(payments_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
+app.include_router(principal_router, prefix="/api")
 app.include_router(helpdesk_router, prefix="/api")
 
 @app.get("/")

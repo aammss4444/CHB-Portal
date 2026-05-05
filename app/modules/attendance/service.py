@@ -6,7 +6,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import and_, extract, func, or_, select, tuple_
+from sqlalchemy import and_, extract, func, or_, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -44,6 +44,9 @@ from app.modules.attendance.schemas import (
 class AttendanceService:
     """Attendance and work-log business logic for Step 7."""
 
+    def __init__(self) -> None:
+        pass
+
     @staticmethod
     def _raise_error(status_code: int, code: str, message: str) -> None:
         raise HTTPException(status_code=status_code, detail={"code": code, "message": message})
@@ -64,7 +67,7 @@ class AttendanceService:
         self,
         db: AsyncSession,
         entity_name: str,
-        entity_id: int,
+        entity_id: Any,
         action: str,
         user_id: int,
         old_value: Optional[dict[str, Any]] = None,
@@ -73,7 +76,7 @@ class AttendanceService:
         db.add(
             AuditLog(
                 entity_name=entity_name,
-                entity_id=entity_id,
+                entity_id=str(entity_id),
                 action=action,
                 user_id=user_id,
                 old_value=old_value,
@@ -100,12 +103,12 @@ class AttendanceService:
 
     async def _get_faculty_context(
         self, db: AsyncSession, current_user: User
-    ) -> tuple[FacultyCredentials, AppointmentLetter]:
+    ) -> tuple[FacultyCredentials, Optional[AppointmentLetter]]:
         """Resolve the logged-in faculty user's credential and accepted appointment."""
         row = (
             await db.execute(
                 select(FacultyCredentials, AppointmentLetter)
-                .join(AppointmentLetter, AppointmentLetter.id == FacultyCredentials.appointment_letter_id)
+                .outerjoin(AppointmentLetter, AppointmentLetter.id == FacultyCredentials.appointment_letter_id)
                 .where(FacultyCredentials.user_id == current_user.id)
             )
         ).first()
@@ -128,12 +131,64 @@ class AttendanceService:
         return appointment
 
     async def _get_credential_or_404(self, db: AsyncSession, credential_id: UUID) -> FacultyCredentials:
+        # 1. Try to find in FacultyCredentials
         credential = (
             await db.execute(select(FacultyCredentials).where(FacultyCredentials.id == credential_id))
         ).scalars().first()
-        if not credential:
-            self._raise_error(404, "NOT_FOUND", "Faculty credential not found")
-        return credential
+        if credential:
+            return credential
+
+        # 2. Try to find in ExistingFaculty (for auto-onboarding)
+        from app.models.existing_faculty import ExistingFaculty
+        faculty = (
+            await db.execute(select(ExistingFaculty).where(ExistingFaculty.id == credential_id))
+        ).scalars().first()
+        
+        if faculty:
+            # Check if they already have a credential linked
+            existing_cred = (
+                await db.execute(select(FacultyCredentials).where(FacultyCredentials.existing_faculty_id == faculty.id))
+            ).scalars().first()
+            if existing_cred:
+                return existing_cred
+            
+            # Auto-provision a basic User and Credential for the Existing Faculty
+            import random
+            import string
+            from app.models.user import User, RoleEnum
+            from app.core.security import get_password_hash
+
+            # Create User
+            username = f"{faculty.full_name.lower().replace(' ', '.')}.{faculty.employee_id}"
+            temp_pass = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+            
+            new_user = User(
+                email=f"{username}@dte.portal", # Unique identifier
+                hashed_password=get_password_hash(temp_pass),
+                full_name=faculty.full_name,
+                role=RoleEnum.FACULTY,
+                is_active=True,
+                institution_id=faculty.institution_id
+            )
+            db.add(new_user)
+            await db.flush()
+
+            # Create Credential
+            new_cred = FacultyCredentials(
+                existing_faculty_id=faculty.id,
+                institution_id=faculty.institution_id,
+                user_id=new_user.id,
+                faculty_code=f"FAC-{faculty.employee_id}",
+                portal_username=username,
+                temp_password_hash=new_user.hashed_password,
+                temp_password_plain=temp_pass,
+                is_active=True
+            )
+            db.add(new_cred)
+            await db.flush()
+            return new_cred
+
+        self._raise_error(404, "NOT_FOUND", "Faculty credential not found")
 
     async def _get_log_or_404(self, db: AsyncSession, log_id: UUID) -> LectureLog:
         log = (await db.execute(select(LectureLog).where(LectureLog.id == log_id))).scalars().first()
@@ -228,63 +283,125 @@ class AttendanceService:
     ) -> list[TimetableSlot]:
         """Create timetable slots for a faculty credential."""
         credential = await self._get_credential_or_404(db, req.faculty_credential_id)
+        # Update payload if it was an auto-provisioned credential
+        if str(req.faculty_credential_id) != str(credential.id):
+            req.faculty_credential_id = credential.id
+
         await self._ensure_credential_active(credential)
         await self._ensure_principal_scope(current_user, credential.institution_id)
 
-        appointment = await self._get_accepted_appointment(db, credential)
-
-        created_slots: list[TimetableSlot] = []
-        for slot in req.slots:
-            if slot.start_time >= slot.end_time:
-                self._raise_error(400, "INVALID_DATE_RANGE", "start_time must be before end_time")
-            overlap = (
+        # Get course ID from appointment OR existing faculty record
+        course_id = None
+        if credential.appointment_letter_id:
+            appointment = (
                 await db.execute(
-                    select(TimetableSlot).where(
-                        TimetableSlot.faculty_credential_id == req.faculty_credential_id,
-                        TimetableSlot.day_of_week == slot.day_of_week,
-                        TimetableSlot.academic_year == req.academic_year,
-                        TimetableSlot.is_active.is_(True),
-                        TimetableSlot.start_time < slot.end_time,
-                        TimetableSlot.end_time > slot.start_time,
+                    select(AppointmentLetter).where(
+                        AppointmentLetter.id == credential.appointment_letter_id
                     )
                 )
             ).scalars().first()
-            if overlap:
-                self._raise_error(409, "INTEGRITY_ERROR", "Overlapping timetable slot exists for this faculty")
+            if appointment:
+                course_id = appointment.course_id
+        
+        if not course_id and credential.existing_faculty_id:
+            from app.models.existing_faculty import ExistingFaculty
+            faculty = (
+                await db.execute(select(ExistingFaculty).where(ExistingFaculty.id == credential.existing_faculty_id))
+            ).scalars().first()
+            if faculty:
+                course_id = faculty.course_id
 
-            created = TimetableSlot(
-                institution_id=credential.institution_id,
-                course_id=appointment.course_id,
-                faculty_credential_id=req.faculty_credential_id,
-                academic_year=req.academic_year,
-                day_of_week=slot.day_of_week,
-                slot_number=slot.slot_number,
-                start_time=slot.start_time,
-                end_time=slot.end_time,
-                subject_name=slot.subject_name,
-                lecture_type=slot.lecture_type,
-                class_name=slot.class_name,
-                is_active=True,
-                created_by=current_user.id,
-            )
-            db.add(created)
-            created_slots.append(created)
+        if not course_id:
+             self._raise_error(400, "HTTP_ERROR", "Could not resolve course_id for faculty")
 
-        await db.flush()
-        for slot in created_slots:
-            await self._write_audit_log(
-                db,
-                "TimetableSlot",
-                self._entity_id_from_uuid(slot.id),
-                "CREATE",
-                current_user.id,
-                new_value={
-                    "faculty_credential_id": str(slot.faculty_credential_id),
-                    "day_of_week": slot.day_of_week,
-                    "slot_number": slot.slot_number,
-                    "academic_year": slot.academic_year,
-                },
-            )
+        # 2. Fetch existing slots to perform an Upsert
+        existing_slots_stmt = select(TimetableSlot).where(
+            TimetableSlot.faculty_credential_id == credential.id,
+            TimetableSlot.academic_year == req.academic_year
+        )
+        existing_res = await db.execute(existing_slots_stmt)
+        existing_map = { (s.day_of_week, s.slot_number): s for s in existing_res.scalars().all() }
+        
+        created_slots: list[TimetableSlot] = []
+        processed_keys = set()
+        for slot in req.slots:
+            if slot.start_time >= slot.end_time:
+                self._raise_error(400, "INVALID_DATE_RANGE", "start_time must be before end_time")
+            
+            key = (slot.day_of_week, slot.slot_number)
+            if key in processed_keys:
+                 self._raise_error(409, "INTEGRITY_ERROR", f"Duplicate slot number {slot.slot_number} for {slot.day_of_week} in request")
+            processed_keys.add(key)
+
+            if key in existing_map:
+                # UPDATE existing slot
+                target = existing_map[key]
+                old_values = {
+                    "subject_name": target.subject_name,
+                    "start_time": str(target.start_time),
+                    "end_time": str(target.end_time),
+                    "is_active": target.is_active
+                }
+                
+                target.course_id = course_id
+                target.subject_name = slot.subject_name
+                target.start_time = slot.start_time
+                target.end_time = slot.end_time
+                target.lecture_type = slot.lecture_type
+                target.class_name = slot.class_name
+                target.is_active = True
+                
+                await self._write_audit_log(
+                    db, "TimetableSlot", str(target.id), "UPDATE", current_user.id,
+                    old_value=old_values,
+                    new_value={
+                        "subject_name": target.subject_name,
+                        "start_time": str(target.start_time),
+                        "is_active": True
+                    }
+                )
+                created_slots.append(target)
+            else:
+                # CREATE new slot
+                new_slot = TimetableSlot(
+                    institution_id=credential.institution_id,
+                    course_id=course_id,
+                    faculty_credential_id=credential.id,
+                    academic_year=req.academic_year,
+                    day_of_week=slot.day_of_week,
+                    slot_number=slot.slot_number,
+                    start_time=slot.start_time,
+                    end_time=slot.end_time,
+                    subject_name=slot.subject_name,
+                    lecture_type=slot.lecture_type,
+                    class_name=slot.class_name,
+                    is_active=True,
+                    created_by=current_user.id
+                )
+                db.add(new_slot)
+                await db.flush()
+                
+                await self._write_audit_log(
+                    db, "TimetableSlot", str(new_slot.id), "CREATE", current_user.id,
+                    new_value={
+                        "faculty_credential_id": str(credential.id),
+                        "day_of_week": slot.day_of_week,
+                        "slot_number": slot.slot_number,
+                        "academic_year": req.academic_year
+                    }
+                )
+                created_slots.append(new_slot)
+
+        # 3. Deactivate slots that were NOT in the new request
+        for key, existing_slot in existing_map.items():
+            if key not in processed_keys and existing_slot.is_active:
+                existing_slot.is_active = False
+                await self._write_audit_log(
+                    db, "TimetableSlot", str(existing_slot.id), "DEACTIVATE", current_user.id,
+                    old_value={"is_active": True},
+                    new_value={"is_active": False}
+                )
+
         await db.commit()
         return created_slots
 
@@ -296,10 +413,34 @@ class AttendanceService:
         academic_year: str,
     ) -> dict[str, list[dict[str, Any]]]:
         """Return weekly timetable grouped by day."""
-        credential = await self._get_credential_or_404(db, faculty_credential_id)
+        # 1. Try to resolve credential ID (could be an existing_faculty_id)
+        from app.models.faculty_credentials import FacultyCredentials
+        from app.models.existing_faculty import ExistingFaculty
+        
+        credential = (
+            await db.execute(select(FacultyCredentials).where(
+                or_(
+                    FacultyCredentials.id == faculty_credential_id,
+                    FacultyCredentials.existing_faculty_id == faculty_credential_id
+                )
+            ))
+        ).scalars().first()
+        
+        if not credential:
+            # Check if it's an existing faculty that hasn't been provisioned yet
+            faculty_exists = (
+                await db.execute(select(ExistingFaculty).where(ExistingFaculty.id == faculty_credential_id))
+            ).scalars().first()
+            if faculty_exists:
+                return {} # Return empty timetable for unprovisioned faculty
+            
+            self._raise_error(404, "NOT_FOUND", "Faculty credential not found")
+        
+        resolved_cred_id = credential.id
+
         if current_user.role == RoleEnum.FACULTY:
             own_credential, _ = await self._get_faculty_context(db, current_user)
-            if own_credential.id != faculty_credential_id:
+            if own_credential.id != resolved_cred_id:
                 self._raise_error(403, "UNAUTHORIZED_ACCESS", "Faculty can view only their own timetable")
         elif current_user.role == RoleEnum.PRINCIPAL:
             await self._ensure_principal_scope(current_user, credential.institution_id)
@@ -308,7 +449,7 @@ class AttendanceService:
             await db.execute(
                 select(TimetableSlot)
                 .where(
-                    TimetableSlot.faculty_credential_id == faculty_credential_id,
+                    TimetableSlot.faculty_credential_id == resolved_cred_id,
                     TimetableSlot.academic_year == academic_year,
                 )
                 .order_by(TimetableSlot.day_of_week.asc(), TimetableSlot.slot_number.asc())
@@ -359,7 +500,7 @@ class AttendanceService:
         await self._write_audit_log(
             db,
             "TimetableSlot",
-            self._entity_id_from_uuid(slot.id),
+            str(slot.id),
             "UPDATE",
             current_user.id,
             old_value=old_values,
@@ -401,7 +542,7 @@ class AttendanceService:
                 await self._write_audit_log(
                     db,
                     "AcademicCalendar",
-                    self._entity_id_from_uuid(existing.id),
+                    str(existing.id),
                     "UPDATE",
                     current_user.id,
                     old_value=old_value,
@@ -421,7 +562,7 @@ class AttendanceService:
                 await self._write_audit_log(
                     db,
                     "AcademicCalendar",
-                    self._entity_id_from_uuid(row.id),
+                    str(row.id),
                     "CREATE",
                     current_user.id,
                     new_value={"day_type": row.day_type, "description": row.description},
@@ -557,7 +698,7 @@ class AttendanceService:
         await self._write_audit_log(
             db,
             "LectureLog",
-            self._entity_id_from_uuid(lecture_log.id),
+            str(lecture_log.id),
             "CREATE",
             current_user.id,
             new_value={"slot_number": lecture_log.slot_number, "lecture_date": str(lecture_log.lecture_date)},
@@ -599,7 +740,7 @@ class AttendanceService:
         await self._write_audit_log(
             db,
             "LectureLog",
-            self._entity_id_from_uuid(lecture_log.id),
+            str(lecture_log.id),
             "UPDATE",
             current_user.id,
             old_value=old_values,
@@ -656,8 +797,8 @@ class AttendanceService:
         """Verify or reject a submitted lecture log."""
         lecture_log = await self._get_log_or_404(db, log_id)
         await self._ensure_principal_scope(current_user, lecture_log.institution_id)
-        if lecture_log.log_status != LectureLogStatus.SUBMITTED.value:
-            self._raise_error(400, "HTTP_ERROR", "Only submitted logs can be verified")
+        if lecture_log.log_status not in {LectureLogStatus.SUBMITTED.value, LectureLogStatus.FLAGGED.value}:
+            self._raise_error(400, "HTTP_ERROR", "Only submitted or flagged logs can be verified")
         if action not in {"VERIFY", "REJECT"}:
             self._raise_error(400, "HTTP_ERROR", "action must be VERIFY or REJECT")
 
@@ -732,7 +873,13 @@ class AttendanceService:
         if limit > 0:
             stmt = stmt.offset(skip).limit(limit)
 
-        logs = (await db.execute(stmt)).scalars().all()
+        from app.models.user import User as UserModel
+        stmt = stmt.join(FacultyCredentials, FacultyCredentials.id == LectureLog.faculty_credential_id).join(UserModel, UserModel.id == FacultyCredentials.user_id).add_columns(UserModel.full_name.label("faculty_name"))
+
+        results = (await db.execute(stmt)).all()
+        logs = [row[0] for row in results]
+        faculty_name_map = {row[0].id: row[1] for row in results}
+        
         log_ids = [log.id for log in logs]
         slot_ids = [log.timetable_slot_id for log in logs if log.timetable_slot_id]
 
@@ -784,6 +931,7 @@ class AttendanceService:
                     ).model_dump()
                     if summaries.get((log.faculty_credential_id, log.lecture_date))
                     else None,
+                    "faculty_name": faculty_name_map.get(log.id),
                 }
             )
             payload.append(item.model_dump())
@@ -1163,22 +1311,4 @@ class AttendanceService:
                 if item.severity == AnomalySeverity.HIGH.value:
                     has_high = True
 
-            # STEP 8 GATE: HIGH severity anomalies must be acknowledged before bill generation is allowed.
-            if has_high:
-                lecture_log.log_status = LectureLogStatus.FLAGGED.value
-                await self._write_lecture_log_audit(
-                    db,
-                    lecture_log.id,
-                    LectureLogAuditAction.FLAGGED,
-                    actor_user_id,
-                    remarks="High severity anomaly detected",
-                )
-                await self._write_audit_log(
-                    db,
-                    "LectureLog",
-                    self._entity_id_from_uuid(lecture_log.id),
-                    "FLAGGED",
-                    actor_user_id,
-                    new_value={"log_status": lecture_log.log_status},
-                )
             await db.commit()

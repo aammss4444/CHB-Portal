@@ -149,9 +149,9 @@ class AdvertisementService:
                 message="Assessment must be CONFIRMED before generating advertisement",
             )
 
-        duplicate = (
+        existing_ad = (
             await db.execute(
-                select(Advertisement.id).where(
+                select(Advertisement).where(
                     and_(
                         Advertisement.institution_id == assessment.institution_id,
                         Advertisement.course_id == assessment.course_id,
@@ -167,12 +167,13 @@ class AdvertisementService:
                     )
                 )
             )
-        ).first()
-        if duplicate:
+        ).scalars().first()
+
+        if existing_ad and self._status_value(existing_ad) != AdvertisementStatus.DRAFT.value:
             self._raise_error(
                 status_code=409,
                 code="ADVERTISEMENT_ALREADY_EXISTS",
-                message="An active advertisement already exists for this institution, Course, and academic year",
+                message=f"An active advertisement already exists in {self._status_value(existing_ad)} status",
             )
 
         templates = (
@@ -217,7 +218,21 @@ class AdvertisementService:
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Template rendering failed: {str(e)}")
 
-        # 6. Save
+        if existing_ad:
+            # Update existing DRAFT
+            update_req = AdvertisementUpdateRequest(
+                content_en=req.content_en if req.content_en else content_en,
+                content_mr=req.content_mr if req.content_mr else content_mr,
+                application_start_date=req.application_start_date,
+                application_end_date=req.application_end_date,
+                qualification_requirements=req.qualification_requirements,
+                required_documents=req.required_documents,
+                important_instructions=req.important_instructions,
+                interview_venue=req.interview_venue
+            )
+            return await self.update_advertisement(db, existing_ad.id, current_user, update_req)
+
+        # 6. Save New
         ad = Advertisement(
             assessment_id=assessment.id,
             institution_id=assessment.institution_id,
@@ -461,17 +476,21 @@ class AdvertisementService:
         }
 
     async def delete_advertisement(self, db: AsyncSession, ad_id: UUID, current_user: User) -> dict[str, str]:
-        """Delete advertisement when it is not published."""
+        """Delete advertisement. Admin can delete any, Principal only unpublished in their scope."""
         ad = await self._get_advertisement_or_404(db, ad_id)
-        await self._assert_principal_scope(current_user, ad.institution_id)
-
-        current_status = self._status_value(ad)
-        if current_status == AdvertisementStatus.PUBLISHED.value:
-            self._raise_error(
-                status_code=400,
-                code="ADVERTISEMENT_IMMUTABLE",
-                message="Published advertisements cannot be deleted",
-            )
+        
+        if current_user.role == RoleEnum.ADMIN:
+            # Admin can delete anything
+            pass
+        else:
+            await self._assert_principal_scope(current_user, ad.institution_id)
+            current_status = self._status_value(ad)
+            if current_status == AdvertisementStatus.PUBLISHED.value:
+                self._raise_error(
+                    status_code=400,
+                    code="ADVERTISEMENT_IMMUTABLE",
+                    message="Published advertisements cannot be deleted by Principal",
+                )
 
         await db.delete(ad)
         await db.commit()

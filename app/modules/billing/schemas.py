@@ -142,6 +142,11 @@ class CHBBillSummaryResponse(BaseModel):
     is_locked: bool
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    faculty_name: Optional[str] = None
+    institution_name: Optional[str] = None
+    total_amount: Optional[Decimal] = None
+    total_lectures: Optional[int] = None
+    month: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 

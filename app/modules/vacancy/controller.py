@@ -130,11 +130,16 @@ class VacancyController:
 
         # 4. Update assessment with AI suggestion
         if ai_res:
-            assessment.ai_suggestion_notes = ai_res.get("assessment")
+            import json
+            assessment.ai_suggestion_notes = json.dumps(ai_res)
             # Update each anomaly if needed, or create new ones
             # For simplicity, we just save the notes for now
             await db.commit()
 
+        # 5. Fetch additional context for unified response
+        high_unack = len([a for a in assessment.anomalies if a.severity == "HIGH" and not a.is_acknowledged])
+
+        from app.modules.vacancy.schemas import AnomalyResponse
         return {
             "status": "success",
             "data": {
@@ -149,6 +154,11 @@ class VacancyController:
                 "status": assessment.status,
                 "ai_suggestion_notes": assessment.ai_suggestion_notes,
                 "anomaly_count": len(assessment.anomalies),
+                "unacknowledged_high_count": high_unack,
+                "anomalies": [AnomalyResponse.model_validate(a) for a in assessment.anomalies],
+                "approved_seats": intake_obj.approved_seats if intake_obj else 0,
+                "actual_admitted": intake_obj.actual_admitted if intake_obj else 0,
+                "ratio": int(norm.faculty_student_ratio) if norm else 20,
                 "ai_analysis": ai_res
             }
         }
@@ -198,6 +208,21 @@ class VacancyController:
         
         norm = await resolve_norm(institution_id, academic_year, course_id, course_cat, db)
 
+        import json
+        ai_analysis = {"insights": []}
+        if assessment.ai_suggestion_notes:
+            try:
+                # Try to parse as JSON if it was saved by the controller
+                parsed = json.loads(assessment.ai_suggestion_notes)
+                if isinstance(parsed, dict) and "insights" in parsed:
+                    ai_analysis = parsed
+                else:
+                    ai_analysis["insights"] = [assessment.ai_suggestion_notes]
+            except:
+                # Fallback to plain string
+                ai_analysis["insights"] = [assessment.ai_suggestion_notes]
+
+        from app.modules.vacancy.schemas import AnomalyResponse
         return {
             "status": "success", 
             "data": {
@@ -214,13 +239,11 @@ class VacancyController:
                 "ai_suggestion_notes": assessment.ai_suggestion_notes,
                 "anomaly_count": len(assessment.anomalies),
                 "unacknowledged_high_count": high_unack,
-                "anomalies": assessment.anomalies,
+                "anomalies": [AnomalyResponse.model_validate(a) for a in assessment.anomalies],
                 "approved_seats": intake.approved_seats if intake else 0,
                 "actual_admitted": intake.actual_admitted if intake else 0,
                 "ratio": int(norm.faculty_student_ratio) if norm else 20,
-                "ai_analysis": {
-                    "insights": [assessment.ai_suggestion_notes] if assessment.ai_suggestion_notes else []
-                }
+                "ai_analysis": ai_analysis
             }
         }
 

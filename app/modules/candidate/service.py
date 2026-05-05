@@ -293,3 +293,17 @@ class CandidateService:
         )
         await db.commit()
         return created
+
+    async def get_profile_by_candidate_id(self, db: AsyncSession, candidate_id: str) -> Candidate:
+        stmt = (
+            select(Candidate)
+            .where(Candidate.id == candidate_id)
+            .options(
+                selectinload(Candidate.qualifications),
+                selectinload(Candidate.experiences),
+            )
+        )
+        candidate = (await db.execute(stmt)).scalars().first()
+        if not candidate:
+            self._raise_error(404, "NOT_FOUND", "Candidate profile not found")
+        return candidate

@@ -155,18 +155,41 @@ class ApplicationService:
             self._raise_error(404, "ADVERTISEMENT_NOT_FOUND", "Advertisement not found.")
         await self._assert_ad_window_open(ad)
 
-        duplicate = (
+        existing = (
             await db.execute(
-                select(Application.id).where(
+                select(Application).where(
                     and_(
                         Application.advertisement_id == req.advertisement_id,
                         Application.candidate_id == candidate.id,
                     )
                 )
             )
-        ).first()
-        if duplicate:
-            self._raise_error(409, "DUPLICATE_APPLICATION", "Candidate has already applied to this advertisement.")
+        ).scalars().first()
+
+        if existing:
+            if existing.status != ApplicationStatus.WITHDRAWN.value:
+                self._raise_error(409, "DUPLICATE_APPLICATION", "Candidate has already applied to this advertisement.")
+            
+            # Re-activate withdrawn application
+            existing.status = ApplicationStatus.DRAFT.value
+            existing.declaration_accepted = False
+            existing.submitted_at = None
+            existing.reviewed_at = None
+            existing.rejection_reason = None
+            existing.applied_designation = req.applied_designation
+            existing.cover_letter = req.cover_letter
+            
+            await self._write_audit(
+                db,
+                "Application",
+                self._entity_id_from_uuid(existing.id),
+                "RE_APPLY",
+                current_user.id,
+                new_value={"status": ApplicationStatus.DRAFT.value},
+            )
+            await db.commit()
+            await db.refresh(existing)
+            return existing
 
         max_retries = 3
         for attempt in range(max_retries):
@@ -196,6 +219,7 @@ class ApplicationService:
                     new_value={"application_number": app_number, "status": ApplicationStatus.DRAFT.value},
                 )
                 await db.commit()
+                await db.refresh(application)
                 return application
                 
             except IntegrityError as exc:
@@ -330,15 +354,6 @@ class ApplicationService:
                 f"Required documents missing: {', '.join(sorted(missing))}",
             )
 
-        # Relaxed for development: allow submission even if some documents have validation issues
-        # invalid_required = [doc.document_type for doc in required_docs if doc.validation_status == "INVALID"]
-        # if invalid_required:
-        #     self._raise_error(
-        #         400,
-        #         "REQUIRED_DOCUMENTS_MISSING",
-        #         f"Invalid required documents: {', '.join(sorted(set(invalid_required)))}",
-        #     )
-
         application.declaration_accepted = True
         application.status = ApplicationStatus.SUBMITTED.value
         application.submitted_at = datetime.now(timezone.utc)
@@ -352,6 +367,7 @@ class ApplicationService:
             new_value={"status": ApplicationStatus.SUBMITTED.value},
         )
         await db.commit()
+        await db.refresh(application)
 
         return {
             "application_number": application.application_number,
@@ -420,11 +436,17 @@ class ApplicationService:
     ) -> Application:
         candidate = await self._get_candidate_or_404(db, current_user.id)
         application = await self._get_application_for_candidate(db, application_id, candidate.id)
+        normalized_status = str(application.status or "").strip().upper()
 
-        if application.status not in {ApplicationStatus.DRAFT.value, ApplicationStatus.SUBMITTED.value}:
-            self._raise_error(400, "APPLICATION_NOT_EDITABLE", "Only DRAFT/SUBMITTED applications can be withdrawn.")
-        if application.status == ApplicationStatus.WITHDRAWN.value:
+        if normalized_status == ApplicationStatus.WITHDRAWN.value:
             self._raise_error(400, "APPLICATION_NOT_EDITABLE", "Application is already withdrawn.")
+
+        if normalized_status not in {ApplicationStatus.DRAFT.value, ApplicationStatus.SUBMITTED.value}:
+            self._raise_error(
+                400,
+                "APPLICATION_NOT_EDITABLE",
+                f"Only DRAFT/SUBMITTED applications can be withdrawn. Current status: {normalized_status or 'UNKNOWN'}",
+            )
 
         application.status = ApplicationStatus.WITHDRAWN.value
         await self._write_audit(
@@ -436,6 +458,7 @@ class ApplicationService:
             new_value={"status": ApplicationStatus.WITHDRAWN.value},
         )
         await db.commit()
+        await db.refresh(application)
         return application
 
     async def list_my_applications(self, db: AsyncSession, current_user: User, skip: int = 0, limit: int = 10) -> tuple[list[dict[str, Any]], int]:
@@ -444,6 +467,7 @@ class ApplicationService:
         stmt = (
             select(
                 Application.id.label("application_id"),
+                Application.advertisement_id.label("advertisement_id"),
                 Application.application_number,
                 Application.status,
                 Application.academic_year,
@@ -467,6 +491,7 @@ class ApplicationService:
         result_list = [
             {
                 "application_id": row["application_id"],
+                "advertisement_id": row["advertisement_id"],
                 "application_number": row["application_number"],
                 "status": row["status"],
                 "institution_name": row["institution_name"],

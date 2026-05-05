@@ -5,8 +5,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func, and_
-from sqlalchemy.orm import selectinload
-
+from sqlalchemy.orm import selectinload, joinedload
 from app.models.existing_faculty import ExistingFaculty
 from app.models.faculty_qualification import FacultyQualification
 from app.models.vacancy_assessment import VacancyAssessment
@@ -14,6 +13,9 @@ from app.models.vacancy_anomaly import VacancyAnomaly
 from app.models.faculty_req import FacultyRequirement
 from app.models.institution import Course
 from app.models.audit import AuditLog
+from app.models.faculty_credentials import FacultyCredentials
+from app.models.candidate import Candidate
+from app.models.appointment_letter import AppointmentLetter
 from app.modules.vacancy.schemas import FacultyCreateRequest, FacultyUpdateRequest, VacancyConfirmRequest
 
 class VacancyService:
@@ -164,32 +166,101 @@ class VacancyService:
         await db.commit()
         return {"status": "success", "message": "Faculty permanently removed from system"}
 
-    async def get_faculty_list(self, db: AsyncSession, institution_id: int, course_id: int, academic_year: str, skip: int = 0, limit: Optional[int] = None):
-        base_filter = and_(
+    async def get_faculty_list(self, db: AsyncSession, institution_id: int, course_id: Optional[int] = None, academic_year: Optional[str] = None, skip: int = 0, limit: Optional[int] = None):
+        # 1. Fetch Existing Faculty
+        stmt = select(ExistingFaculty).where(
             ExistingFaculty.institution_id == institution_id,
-            ExistingFaculty.course_id == course_id,
-            ExistingFaculty.academic_year == academic_year,
             ExistingFaculty.status != "DELETED"
         )
+        if course_id:
+            stmt = stmt.where(ExistingFaculty.course_id == course_id)
+        if academic_year:
+            stmt = stmt.where(ExistingFaculty.academic_year == academic_year)
+        
+        stmt = stmt.options(selectinload(ExistingFaculty.qualifications_list))
+        result = await db.execute(stmt)
+        existing_items = result.scalars().all()
 
-        total_stmt = select(func.count()).select_from(ExistingFaculty).where(base_filter)
-        total_res = await db.execute(total_stmt)
-        total = total_res.scalar_one()
+        # 2. Fetch Recruited Faculty (Credentials issued and accepted)
+        recruited_stmt = (
+            select(FacultyCredentials)
+            .join(AppointmentLetter, AppointmentLetter.id == FacultyCredentials.appointment_letter_id)
+            .join(Candidate, Candidate.id == FacultyCredentials.candidate_id)
+            .where(
+                FacultyCredentials.institution_id == institution_id,
+                FacultyCredentials.is_active == True
+            )
+        )
+        if course_id:
+            recruited_stmt = recruited_stmt.where(AppointmentLetter.course_id == course_id)
+        if academic_year:
+            recruited_stmt = recruited_stmt.where(AppointmentLetter.academic_year == academic_year)
+        
+        recruited_stmt = recruited_stmt.options(
+            joinedload(FacultyCredentials.appointment_letter), 
+            joinedload(FacultyCredentials.candidate).selectinload(Candidate.qualifications)
+        )
+        recruited_res = await db.execute(recruited_stmt)
+        recruited_items = recruited_res.scalars().all()
 
-        effective_stmt = select(func.count()).select_from(ExistingFaculty).where(base_filter, ExistingFaculty.is_effective == True)
-        effective_res = await db.execute(effective_stmt)
-        effective = effective_res.scalar_one()
+        # 3. Transform and Merge
+        # We need to return objects that the frontend can handle (FacultyResponse schema compatible)
+        unified_items = []
+        
+        # Add Existing Faculty
+        for f in existing_items:
+            unified_items.append(f)
+            
+        # Add Recruited Faculty (Mapped to a compatible structure)
+        from types import SimpleNamespace
+        for r in recruited_items:
+            # Get highest qualification
+            highest = next((q for q in r.candidate.qualifications if q.is_highest), None)
+            if not highest and r.candidate.qualifications:
+                highest = r.candidate.qualifications[0]
 
+            # Create a mock object that looks like ExistingFaculty for the frontend
+            mock_f = SimpleNamespace(
+                id=r.id, # Credential ID is what the timetable needs
+                full_name=r.candidate.full_name,
+                designation=r.appointment_letter.designation,
+                employment_type="CHB", # Or whatever designation
+                qualification=highest.degree if highest else "",
+                specialization=highest.specialization if highest else "",
+                date_of_birth=r.candidate.date_of_birth,
+                date_of_joining=r.appointment_letter.joining_date,
+                status="ACTIVE",
+                academic_year=r.appointment_letter.academic_year,
+                institution_id=institution_id,
+                course_id=r.appointment_letter.course_id,
+                employee_id=r.faculty_code,
+                is_effective=True,
+                qualifications_list=[
+                    {
+                        "degree": q.degree,
+                        "specialization": q.specialization,
+                        "university": q.university,
+                        "year_of_passing": q.year_of_passing,
+                        "is_highest": q.is_highest,
+                        "id": str(q.id),
+                        "faculty_id": str(r.id)
+                    } for q in r.candidate.qualifications
+                ],
+                credential_id=r.id
+            )
+            unified_items.append(mock_f)
+
+        total = len(unified_items)
+        # Recalculate effective/non-effective for the combined list
+        effective = len([f for f in unified_items if getattr(f, 'is_effective', True)])
         non_effective = total - effective
 
-        stmt = select(ExistingFaculty).filter(base_filter).options(selectinload(ExistingFaculty.qualifications_list))
+        # Apply pagination if needed
+        final_items = unified_items
         if limit is not None:
-            stmt = stmt.offset(skip).limit(limit)
+            final_items = unified_items[skip : skip + limit]
             
-        result = await db.execute(stmt)
-        items = result.scalars().all()
-        
-        return items, total, effective, non_effective
+        return final_items, total, effective, non_effective
 
     async def suggest_vacancy(self, db: AsyncSession, user_id: int, institution_id: int, course_id: int, academic_year: str):
         # 1. Gate: Check Step 1 Approval

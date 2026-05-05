@@ -23,6 +23,7 @@ from app.models.vacancy_anomaly import VacancyAnomaly
 from app.models.audit import AuditLog
 from app.models.user import User
 from app.models.selection_ai_snapshot import SelectionAISnapshot
+from app.models.appointment_letter import AppointmentLetter
 
 from app.modules.selection.schemas import (
     ShortlistRequest,
@@ -161,9 +162,18 @@ class SelectionService:
         if not ad:
             self._raise_error(404, "ADVERTISEMENT_NOT_FOUND", "Advertisement not found")
             
-        completed = (await db.execute(select(SelectionResult).where(SelectionResult.advertisement_id == req.advertisement_id))).scalars().first()
-        if completed:
-             self._raise_error(400, "SELECTION_COMPLETED", "Marks cannot be entered for completed selection")
+        # Allow entering marks unless THIS specific candidate is already confirmed
+        candidate_confirmed = (await db.execute(
+            select(SelectionResult)
+            .where(and_(
+                SelectionResult.advertisement_id == req.advertisement_id,
+                SelectionResult.candidate_id == req.candidate_id,
+                SelectionResult.status == FinalResultStatus.CONFIRMED.value
+            ))
+        )).scalars().first()
+        
+        if candidate_confirmed:
+             self._raise_error(400, "SELECTION_COMPLETED", "Marks cannot be entered for a candidate whose selection is already confirmed")
 
         sc = (await db.execute(select(ShortlistedCandidate).where(
             and_(ShortlistedCandidate.advertisement_id == req.advertisement_id, ShortlistedCandidate.application_id == req.application_id)
@@ -237,6 +247,21 @@ class SelectionService:
         
         if not all_scs:
             self._raise_error(400, "NO_CANDIDATES", "No candidates shortlisted for this round")
+
+        # Check if any letters have been issued. If so, block re-ranking to preserve integrity.
+        letters_count = (await db.execute(
+            select(func.count(AppointmentLetter.id))
+            .where(AppointmentLetter.selection_result_id.in_(
+                select(SelectionResult.id).where(SelectionResult.advertisement_id == advertisement_id)
+            ))
+        )).scalar_one()
+        
+        if letters_count > 0:
+            self._raise_error(
+                400, 
+                "RANKING_LOCKED", 
+                "Cannot re-generate rankings because appointment letters have already been issued. Please cancel issued letters first if you need to re-rank."
+            )
 
         ranking_inputs = []
         for sc in all_scs:
@@ -576,3 +601,38 @@ class SelectionService:
         await db.refresh(snapshot)
         
         return {"status": "success", "snapshot_id": snapshot.id}
+
+    async def get_selection_results(self, db: AsyncSession, institution_id: int | None, status: str | None, result_status: str | None) -> List[dict]:
+        filters = []
+        if institution_id:
+            filters.append(SelectionResult.institution_id == institution_id)
+        if status:
+            filters.append(SelectionResult.status == status)
+        if result_status:
+            filters.append(SelectionResult.result_status == result_status)
+            
+        from app.models.institution import Course
+        stmt = (
+            select(SelectionResult, Candidate.full_name, Application.application_number, Course.name.label("course_name"))
+            .join(Candidate, Candidate.id == SelectionResult.candidate_id)
+            .join(Application, Application.id == SelectionResult.application_id)
+            .join(Course, Course.id == SelectionResult.course_id)
+            .where(and_(*filters))
+            .order_by(SelectionResult.created_at.desc())
+        )
+        rows = (await db.execute(stmt)).all()
+        
+        return [
+            {
+                "id": sr.id,
+                "candidate_name": name,
+                "course_name": cname,
+                "application_number": app_num,
+                "final_score": float(sr.final_score),
+                "rank": sr.rank,
+                "result_status": sr.result_status,
+                "status": sr.status,
+                "created_at": sr.created_at
+            }
+            for sr, name, app_num, cname in rows
+        ]

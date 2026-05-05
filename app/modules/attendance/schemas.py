@@ -162,6 +162,7 @@ class LectureLogResponse(BaseModel):
     timetable_slot: Optional[TimetableSlotResponse] = None
     anomaly_flags: list[AnomalyFlagResponse] = []
     daily_summary: Optional[DailyAttendanceSummaryResponse] = None
+    faculty_name: Optional[str] = None
 
 
 # STEP 8 GATE: feeds bill generation.

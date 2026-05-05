@@ -11,7 +11,6 @@ from app.db.session import get_db
 from app.models.user import RoleEnum, User
 from app.modules.attendance.controller import AttendanceController
 from app.modules.attendance.schemas import (
-    AnomalyAcknowledgeRequest,
     BulkSubmitRequest,
     CalendarBulkUpsertRequest,
     LectureLogCreateRequest,
@@ -39,6 +38,15 @@ async def create_timetable(
     current_user: User = Depends(get_current_user),
 ):
     return await controller.create_timetable(db, current_user, req)
+
+
+@router.get("/timetable/my", dependencies=[Depends(faculty_only)])
+async def get_my_timetable(
+    academic_year: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return await controller.get_my_timetable(db, current_user, academic_year)
 
 
 @router.get("/timetable/{faculty_credential_id}", dependencies=[Depends(staff_or_faculty)])
@@ -142,7 +150,6 @@ async def update_log(
 @router.post("/logs/{log_id}/submit", dependencies=[Depends(faculty_only)])
 async def submit_log(
     log_id: UUID,
-    req: LectureLogSubmitRequest,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -157,61 +164,3 @@ async def verify_log(
     current_user: User = Depends(get_current_user),
 ):
     return await controller.verify_log(db, current_user, log_id, req)
-
-
-@router.get("/anomalies", dependencies=[Depends(admin_or_principal)])
-async def list_anomalies(
-    pagination: PaginationParams = Depends(),
-    faculty_credential_id: Optional[UUID] = Query(None),
-    severity: Optional[str] = Query(None),
-    is_acknowledged: Optional[bool] = Query(None),
-    institution_id: Optional[int] = Query(None),
-    month: Optional[int] = Query(None, ge=1, le=12),
-    year: Optional[int] = Query(None),
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return await controller.list_anomalies(
-        db, current_user, faculty_credential_id, severity, is_acknowledged, institution_id, month, year, pagination.skip, pagination.limit
-    )
-
-
-@router.post("/anomalies/{anomaly_id}/acknowledge", dependencies=[Depends(principal_only)])
-async def acknowledge_anomaly(
-    anomaly_id: UUID,
-    req: AnomalyAcknowledgeRequest,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return await controller.acknowledge_anomaly(db, current_user, anomaly_id, req.remarks)
-
-@router.post("/logs/{log_id}/ai-check", dependencies=[Depends(principal_only)])
-async def ai_check_log(
-    log_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return await controller.ai_check_log(db, current_user, log_id)
-
-@router.get("/faculty/{faculty_credential_id}/ai-analysis", dependencies=[Depends(admin_or_principal)])
-async def ai_analysis(
-    faculty_credential_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return await controller.ai_analysis(db, current_user, faculty_credential_id)
-
-@router.get("/ai-monitor", dependencies=[Depends(RoleChecker([RoleEnum.ADMIN]))])
-async def ai_monitor(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return await controller.ai_monitor(db, current_user)
-
-@router.post("/faculty/{faculty_credential_id}/ai-snapshot", dependencies=[Depends(admin_or_principal)])
-async def ai_snapshot(
-    faculty_credential_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return await controller.ai_snapshot(db, current_user, faculty_credential_id)

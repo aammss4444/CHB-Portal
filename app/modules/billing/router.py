@@ -172,35 +172,3 @@ async def regenerate_bill(
     return await controller.regenerate_bill(db, current_user, bill_id)
 
 
-# AI Endpoints
-
-@router.post("/{bill_id}/ai-validate", dependencies=[Depends(approval_roles)])
-async def ai_validate_bill(
-    bill_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return await controller.ai_validate_bill(db, current_user, bill_id)
-
-@router.get("/{bill_id}/ai-readiness", dependencies=[Depends(approval_roles)])
-async def ai_readiness(
-    bill_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return await controller.ai_readiness(db, current_user, bill_id)
-
-@router.get("/ai-monitor", dependencies=[Depends(admin_only)])
-async def ai_monitor(
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return await controller.ai_monitor(db, current_user)
-
-@router.post("/{bill_id}/ai-snapshot", dependencies=[Depends(approval_roles)])
-async def ai_snapshot(
-    bill_id: UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return await controller.ai_snapshot(db, current_user, bill_id)

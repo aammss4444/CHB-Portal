@@ -15,14 +15,11 @@ from app.modules.billing.schemas import (
     RateMasterUpdateRequest,
 )
 from app.modules.billing.service import BillingService
-from app.modules.billing.ai_engine import BillingAIEngine
-from app.modules.billing.ai_service import BillingAIService
 
 
 class BillingController:
     def __init__(self) -> None:
         self.service = BillingService()
-        self.ai_service = BillingAIService(BillingAIEngine())
 
     async def create_rates(self, db: AsyncSession, current_user: User, req: RateMasterCreateRequest):
         data = await self.service.bulk_upsert_rates(db, current_user, req)
@@ -45,8 +42,7 @@ class BillingController:
 
     async def generate_bill(self, db: AsyncSession, current_user: User, req: BillGenerateRequest):
         data = await self.service.generate_bill_endpoint(db, current_user, req)
-        ai_validation = await self.ai_service.validate_generated_bill(data)
-        return {"status": "success", "data": data, "ai_validation": ai_validation}
+        return {"status": "success", "data": data}
 
     async def generate_bulk(self, db: AsyncSession, current_user: User, req: BulkBillGenerateRequest):
         data = await self.service.generate_bulk_bills(db, current_user, req)
@@ -125,79 +121,3 @@ class BillingController:
         data = await self.service.regenerate_bill(db, current_user, bill_id)
         return {"status": "success", "data": data}
 
-    async def _get_ai_payload(self, db: AsyncSession, current_user: User, bill_id: UUID) -> dict:
-        # Fetch full bill details including line items
-        bill_data = await self.service.get_bill_detail(db, current_user, bill_id)
-        
-        # PII Masking: Remove sensitive identifiers (like faculty name, ID, etc. if we just want to validate logic)
-        safe_bill_data = {
-            "id": str(bill_data["id"]),
-            "academic_year": bill_data["academic_year"],
-            "month": bill_data["month"],
-            "total_amount": float(bill_data["total_amount"]),
-            "status": bill_data["status"],
-            "line_items": [
-                {
-                    "lecture_date": item["lecture_date"],
-                    "lecture_type": item["lecture_type"],
-                    "hours": item["hours"],
-                    "rate_applied": float(item["rate_applied"]),
-                    "amount": float(item["amount"])
-                }
-                for item in bill_data.get("line_items", [])
-            ]
-        }
-        
-        # Norms (Mocked here for simplicity, in a real app fetch from DB)
-        safe_norms = {
-            "max_lectures_per_day": 6,
-            "max_hours_per_month": 60,
-            "rate_rules": {
-                "THEORY": 500,
-                "PRACTICAL": 250
-            }
-        }
-        
-        return {
-            "bill_data": safe_bill_data,
-            "attendance": safe_bill_data["line_items"], # Attendance logs derived from bill line items
-            "norms": safe_norms
-        }
-
-    async def ai_validate_bill(self, db: AsyncSession, current_user: User, bill_id: UUID):
-        payload = await self._get_ai_payload(db, current_user, bill_id)
-        ai_validation = await self.ai_service.analyze(payload)
-        return {"status": "success", "data": ai_validation}
-
-    async def ai_readiness(self, db: AsyncSession, current_user: User, bill_id: UUID):
-        payload = await self._get_ai_payload(db, current_user, bill_id)
-        ai_validation = await self.ai_service.analyze(payload)
-        
-        return {
-            "status": "success", 
-            "data": {
-                "approval_probability": ai_validation.get("approval_probability", 0.0),
-                "risk_level": ai_validation.get("risk_level", "LOW"),
-                "summary": f"Bill validation status: {ai_validation.get('validation_status')} with {len(ai_validation.get('issues', []))} issues."
-            }
-        }
-
-    async def ai_monitor(self, db: AsyncSession, current_user: User):
-        # Conceptual implementation for system-wide monitor
-        # In a real app, this would iterate over pending bills and run them through AI.
-        # For performance, this usually returns pre-computed stats or a summarized snapshot.
-        return {
-            "status": "success",
-            "data": {
-                "high_risk_bills": [],
-                "common_issues": ["Missing supporting documents", "Excess hours claimed"],
-                "summary": "System monitor active. No critical bills flagged."
-            }
-        }
-
-    async def ai_snapshot(self, db: AsyncSession, current_user: User, bill_id: UUID):
-        payload = await self._get_ai_payload(db, current_user, bill_id)
-        ai_validation = await self.ai_service.analyze(payload)
-        
-        # Normally save to a 'bill_ai_snapshots' table. We return it here to confirm execution.
-        return {"status": "success", "message": "AI Snapshot created and stored.", "data": ai_validation}

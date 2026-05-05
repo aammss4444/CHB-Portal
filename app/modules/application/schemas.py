@@ -87,6 +87,7 @@ class ApplicationSubmitResponse(BaseModel):
 
 class MyApplicationItem(BaseModel):
     application_id: UUID
+    advertisement_id: UUID
     application_number: str
     status: str
     institution_name: str

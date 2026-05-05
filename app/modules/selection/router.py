@@ -23,6 +23,17 @@ controller = SelectionController()
 principal_only = RoleChecker([RoleEnum.PRINCIPAL])
 admin_or_principal = RoleChecker([RoleEnum.ADMIN, RoleEnum.PRINCIPAL])
 
+@router.get("/results", dependencies=[Depends(admin_or_principal)])
+async def get_all_results(
+    status: str | None = None,
+    result_status: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    if current_user.role == RoleEnum.PRINCIPAL:
+        return await controller.get_all_results(db, current_user.institution_id, status, result_status)
+    return await controller.get_all_results(db, None, status, result_status)
+
 async def check_ad_access(db: AsyncSession, current_user: User, advertisement_id: UUID):
     ad_obj = (await db.execute(select(Advertisement).where(Advertisement.id == advertisement_id))).scalars().first()
     if ad_obj and current_user.role == RoleEnum.PRINCIPAL:

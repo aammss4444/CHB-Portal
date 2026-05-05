@@ -353,10 +353,12 @@ class LLMService:
            - Terms and Conditions: Specifically mention the temporary nature of CHB appointments.
         4. Marathi Nuances: Ensure the Marathi translation is high-quality, using correct administrative terminology (e.g., 'घड्याळी तासिका तत्त्वावर', 'पात्रता', 'आरक्षण').
 
+
         Output Format:
         Return a valid JSON object with:
         - "english": "Markdown or HTML formatted advertisement in English"
         - "marathi": "Markdown or HTML formatted advertisement in Marathi"
+        - Marathi Should be proper, readable and professional. and everthing should be translated correctly.
         - "issues": ["List any data gaps like missing reservation info or unclear deadlines"]
         - "confidence_score": 0.99
         - "sections_present": {{"qualifications": true, "reservation": true, "deadline": true, "instructions": true}}

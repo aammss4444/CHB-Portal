@@ -133,42 +133,7 @@ class BillingService:
                 "Faculty credentials are inactive for billing",
             )
 
-        # Gate 2
-        high_anomaly_count = int(
-            (
-                await db.execute(
-                    select(func.count(AttendanceAnomaly.id))
-                    .outerjoin(LectureLog, LectureLog.id == AttendanceAnomaly.lecture_log_id)
-                    .outerjoin(DailyAttendanceSummary, DailyAttendanceSummary.id == AttendanceAnomaly.summary_id)
-                    .where(
-                        AttendanceAnomaly.faculty_credential_id == faculty_credential_id,
-                        AttendanceAnomaly.severity == AnomalySeverity.HIGH.value,
-                        AttendanceAnomaly.is_acknowledged.is_(False),
-                        or_(
-                            and_(
-                                LectureLog.id.is_not(None),
-                                LectureLog.lecture_date >= period_start,
-                                LectureLog.lecture_date <= period_end,
-                            ),
-                            and_(
-                                DailyAttendanceSummary.id.is_not(None),
-                                DailyAttendanceSummary.attendance_date >= period_start,
-                                DailyAttendanceSummary.attendance_date <= period_end,
-                            ),
-                        ),
-                    )
-                )
-            ).scalar_one()
-            or 0
-        )
-        if high_anomaly_count > 0:
-            self._raise_error(
-                403,
-                "ANOMALY_UNACKNOWLEDGED",
-                f"Resolve {high_anomaly_count} unacknowledged HIGH anomalies before generating bill",
-            )
-
-        # Gate 3
+        # Gate 3 (Renamed to 2 internally or just left as is)
         unverified_count = int(
             (
                 await db.execute(
@@ -266,12 +231,21 @@ class BillingService:
     ) -> dict[tuple[str, str], Decimal]:
         if not lecture_types:
             return {}
+            
+        possible_ays = [academic_year]
+        parts = academic_year.split('-')
+        if len(parts) == 2:
+            if len(parts[1]) == 2:
+                possible_ays.append(f"{parts[0]}-20{parts[1]}")
+            elif len(parts[1]) == 4:
+                possible_ays.append(f"{parts[0]}-{parts[1][2:]}")
+                
         rows = (
             await db.execute(
                 select(RateMaster)
                 .where(
                     RateMaster.institution_id == institution_id,
-                    RateMaster.academic_year == academic_year,
+                    RateMaster.academic_year.in_(possible_ays),
                     RateMaster.designation == designation,
                     RateMaster.lecture_type.in_(list(lecture_types)),
                     RateMaster.is_active.is_(True),
@@ -373,6 +347,14 @@ class BillingService:
                 for row in anomalies
             ]
 
+        from app.models.institution import Institution
+        from app.models.faculty_credentials import FacultyCredentials
+        from app.models.user import User
+
+        inst = await db.get(Institution, bill.institution_id)
+        faculty_cred = await db.get(FacultyCredentials, bill.faculty_credential_id)
+        faculty_user = await db.get(User, faculty_cred.user_id) if faculty_cred else None
+
         payload = CHBBillResponse(
             id=bill.id,
             bill_number=bill.bill_number,
@@ -403,6 +385,11 @@ class BillingService:
             is_locked=bill.is_locked,
             created_at=bill.created_at,
             updated_at=bill.updated_at,
+            faculty_name=faculty_user.full_name if faculty_user else "N/A",
+            institution_name=inst.name if inst else "N/A",
+            total_amount=Decimal(bill.net_amount),
+            total_lectures=bill.total_billable_lectures,
+            month=bill.period_start.month,
             line_items=[BillLineItemResponse.model_validate(row, from_attributes=True) for row in line_items],
             approval_chain=[
                 {
@@ -658,7 +645,7 @@ class BillingService:
             audit_action = BillAuditAction.APPROVED
         elif approver_role == RoleEnum.RO:
             bill.bill_status = BillStatus.RO_APPROVED.value
-            bill.current_approver_role = BillApproverRole.DIRECTORATE.value
+            bill.current_approver_role = BillApproverRole.TREASURY.value
             audit_action = BillAuditAction.APPROVED
         elif approver_role == RoleEnum.DIRECTORATE:
             bill.bill_status = BillStatus.DIRECTORATE_APPROVED.value
@@ -824,10 +811,9 @@ class BillingService:
         rows = (
             await db.execute(stmt.order_by(RateMaster.designation.asc(), RateMaster.lecture_type.asc(), RateMaster.effective_from.desc()))
         ).scalars().all()
-        grouped: dict[str, list[dict[str, Any]]] = {}
+        data: list[dict[str, Any]] = []
         for row in rows:
-            key = self._enum_value(row.designation)
-            grouped.setdefault(key, []).append(
+            data.append(
                 {
                     "id": row.id,
                     "institution_id": row.institution_id,
@@ -843,7 +829,7 @@ class BillingService:
                     "updated_at": row.updated_at,
                 }
             )
-        return grouped
+        return data
 
     async def update_rate(self, db: AsyncSession, current_user: User, rate_id: UUID, req: Any) -> dict[str, Any]:
         """Update a rate row unless bills already reference its snapshot value."""
@@ -916,7 +902,14 @@ class BillingService:
         """Endpoint wrapper for one-bill generation with request-level role scoping."""
         credential, appointment = await self._get_faculty_context(db, req.faculty_credential_id)
         await self._assert_principal_scope(current_user, credential.institution_id)
-        if appointment.academic_year != req.academic_year:
+        def _norm_ay(ay: str) -> str:
+            # 2026-2027 -> 2026-27
+            parts = ay.split('-')
+            if len(parts) == 2 and len(parts[1]) == 4:
+                return f"{parts[0]}-{parts[1][2:]}"
+            return ay
+
+        if _norm_ay(appointment.academic_year) != _norm_ay(req.academic_year):
             self._raise_error(
                 400,
                 "HTTP_ERROR",
@@ -1088,9 +1081,23 @@ class BillingService:
         limit: int = 10,
     ) -> tuple[list[dict[str, Any]], int]:
         """List bills with role-scoped filters and queue-scoped views for approval roles."""
-        stmt = select(CHBBill)
-        filters = []
+        from app.models.institution import Institution
+        from app.models.faculty_credentials import FacultyCredentials
+        from app.models.user import User
 
+        stmt = select(
+            CHBBill,
+            Institution.name.label("institution_name"),
+            User.full_name.label("faculty_name")
+        ).outerjoin(
+            Institution, Institution.id == CHBBill.institution_id
+        ).outerjoin(
+            FacultyCredentials, FacultyCredentials.id == CHBBill.faculty_credential_id
+        ).outerjoin(
+            User, User.id == FacultyCredentials.user_id
+        )
+
+        filters = []
         if faculty_credential_id:
             filters.append(CHBBill.faculty_credential_id == faculty_credential_id)
         if institution_id:
@@ -1113,7 +1120,7 @@ class BillingService:
                 await db.execute(select(FacultyCredentials.id).where(FacultyCredentials.user_id == current_user.id))
             ).scalar_one_or_none()
             if own_credential_id is None:
-                return []
+                return [], 0
             filters.append(CHBBill.faculty_credential_id == own_credential_id)
         elif current_user.role == RoleEnum.PRINCIPAL:
             if current_user.institution_id is None:
@@ -1130,38 +1137,43 @@ class BillingService:
         if limit > 0:
             stmt = stmt.offset(skip).limit(limit)
 
-        rows = (await db.execute(stmt)).scalars().all()
+        rows = (await db.execute(stmt)).all()
         result_list = [
             {
-                "id": row.id,
-                "bill_number": row.bill_number,
-                "faculty_credential_id": row.faculty_credential_id,
-                "institution_id": row.institution_id,
-                "course_id": row.course_id,
-                "academic_year": row.academic_year,
-                "period_start": row.period_start,
-                "period_end": row.period_end,
-                "designation": row.designation,
-                "total_theory_lectures": row.total_theory_lectures,
-                "total_lab_lectures": row.total_lab_lectures,
-                "total_tutorial_lectures": row.total_tutorial_lectures,
-                "total_extra_lectures": row.total_extra_lectures,
-                "total_substitute_lectures": row.total_substitute_lectures,
-                "total_billable_lectures": row.total_billable_lectures,
-                "gross_amount": row.gross_amount,
-                "deductions": row.deductions,
-                "net_amount": row.net_amount,
-                "bill_status": self._enum_value(row.bill_status),
-                "current_approver_role": self._enum_value(row.current_approver_role) if row.current_approver_role else None,
-                "rejection_stage": row.rejection_stage,
-                "rejection_reason": row.rejection_reason,
-                "generated_by": row.generated_by,
-                "generated_at": row.generated_at,
-                "submitted_at": row.submitted_at,
-                "treasury_processed_at": row.treasury_processed_at,
-                "is_locked": row.is_locked,
-                "created_at": row.created_at,
-                "updated_at": row.updated_at,
+                "id": row.CHBBill.id,
+                "bill_number": row.CHBBill.bill_number,
+                "faculty_credential_id": row.CHBBill.faculty_credential_id,
+                "institution_id": row.CHBBill.institution_id,
+                "course_id": row.CHBBill.course_id,
+                "academic_year": row.CHBBill.academic_year,
+                "period_start": row.CHBBill.period_start,
+                "period_end": row.CHBBill.period_end,
+                "designation": row.CHBBill.designation,
+                "total_theory_lectures": row.CHBBill.total_theory_lectures,
+                "total_lab_lectures": row.CHBBill.total_lab_lectures,
+                "total_tutorial_lectures": row.CHBBill.total_tutorial_lectures,
+                "total_extra_lectures": row.CHBBill.total_extra_lectures,
+                "total_substitute_lectures": row.CHBBill.total_substitute_lectures,
+                "total_billable_lectures": row.CHBBill.total_billable_lectures,
+                "gross_amount": row.CHBBill.gross_amount,
+                "deductions": row.CHBBill.deductions,
+                "net_amount": row.CHBBill.net_amount,
+                "bill_status": self._enum_value(row.CHBBill.bill_status),
+                "current_approver_role": self._enum_value(row.CHBBill.current_approver_role) if row.CHBBill.current_approver_role else None,
+                "rejection_stage": row.CHBBill.rejection_stage,
+                "rejection_reason": row.CHBBill.rejection_reason,
+                "generated_by": row.CHBBill.generated_by,
+                "generated_at": row.CHBBill.generated_at,
+                "submitted_at": row.CHBBill.submitted_at,
+                "treasury_processed_at": row.CHBBill.treasury_processed_at,
+                "is_locked": row.CHBBill.is_locked,
+                "created_at": row.CHBBill.created_at,
+                "updated_at": row.CHBBill.updated_at,
+                "faculty_name": row.faculty_name or "N/A",
+                "institution_name": row.institution_name or "N/A",
+                "total_amount": row.CHBBill.net_amount,
+                "total_lectures": row.CHBBill.total_billable_lectures,
+                "month": row.CHBBill.period_start.month,
             }
             for row in rows
         ]

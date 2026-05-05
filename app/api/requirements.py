@@ -943,22 +943,63 @@ async def generate_requirements(gen_req: GenerateRequirementRequest, db: AsyncSe
             db.add(req)
             await db.commit()
 
-            # Step 1 changed: unlock Step 2 so Principal can reassess and reconfirm.
-            await db.execute(
-                update(VacancyAssessment)
-                .where(
-                    VacancyAssessment.institution_id == gen_req.institution_id,
-                    VacancyAssessment.course_id == intake.course_id,
-                    VacancyAssessment.academic_year == gen_req.academic_year,
-                )
-                .values(
-                    status="DRAFT",
-                    confirmed_vacancy=None,
-                    confirmed_by=None,
-                    confirmed_at=None,
-                    requirement_id=req.id,
-                )
+            # Step 1 changed: provisioning Step 2 so Principal can see the requirement count immediately.
+            from app.models.existing_faculty import ExistingFaculty
+            
+            # Fetch current strength for this course/year
+            total_stmt = select(func.count()).select_from(ExistingFaculty).filter(
+                ExistingFaculty.institution_id == gen_req.institution_id,
+                ExistingFaculty.course_id == intake.course_id,
+                ExistingFaculty.academic_year == gen_req.academic_year
             )
+            total_existing = (await db.execute(total_stmt)).scalar() or 0
+            
+            effective_stmt = select(func.count()).select_from(ExistingFaculty).filter(
+                ExistingFaculty.institution_id == gen_req.institution_id,
+                ExistingFaculty.course_id == intake.course_id,
+                ExistingFaculty.academic_year == gen_req.academic_year,
+                ExistingFaculty.is_effective == True
+            )
+            effective_existing = (await db.execute(effective_stmt)).scalar() or 0
+            
+            # Preliminary suggested vacancy (Deterministic only)
+            prelim_suggested = max(0, required - effective_existing)
+
+            # Check if VacancyAssessment already exists
+            assess_stmt = select(VacancyAssessment).filter(
+                VacancyAssessment.institution_id == gen_req.institution_id,
+                VacancyAssessment.course_id == intake.course_id,
+                VacancyAssessment.academic_year == gen_req.academic_year,
+            )
+            assess_res = await db.execute(assess_stmt)
+            assessment = assess_res.scalars().first()
+
+            if assessment:
+                # Update existing
+                assessment.status = "DRAFT"
+                assessment.confirmed_vacancy = None
+                assessment.confirmed_by = None
+                assessment.confirmed_at = None
+                assessment.requirement_id = req.id
+                assessment.required_count = required
+                assessment.total_existing = total_existing
+                assessment.effective_existing = effective_existing
+                assessment.suggested_vacancy = prelim_suggested
+            else:
+                # Create new skeleton for Principal to pick up
+                assessment = VacancyAssessment(
+                    institution_id=gen_req.institution_id,
+                    course_id=intake.course_id,
+                    academic_year=gen_req.academic_year,
+                    requirement_id=req.id,
+                    required_count=required,
+                    total_existing=total_existing,
+                    effective_existing=effective_existing,
+                    suggested_vacancy=prelim_suggested,
+                    status="DRAFT"
+                )
+                db.add(assessment)
+            
             await db.commit()
 
             await log_audit(db, "FacultyRequirement", req.id, "GENERATE", current_user.id, formula_json)
@@ -1213,6 +1254,54 @@ async def faculty_requirement_calculator(
 
         # 8. Build course summary
         vacancy_gap = max(0, required - existing_count)
+
+        # Provision records for persistence
+        from app.models.faculty_req import FacultyRequirement
+        from app.models.vacancy_assessment import VacancyAssessment
+        
+        req_obj = FacultyRequirement(
+            intake_id=intake.id,
+            computed_required_count=required,
+            formula_breakdown={
+                "method": "AI_CALCULATOR",
+                "calc_base": calc_base,
+                "norm_ratio": norm.faculty_student_ratio
+            }
+        )
+        db.add(req_obj)
+        await db.flush()
+
+        assess_stmt = select(VacancyAssessment).filter(
+            VacancyAssessment.institution_id == inst_id,
+            VacancyAssessment.course_id == course.id,
+            VacancyAssessment.academic_year == academic_year
+        )
+        assess_res = await db.execute(assess_stmt)
+        assessment = assess_res.scalars().first()
+
+        if assessment:
+            assessment.status = "DRAFT"
+            assessment.requirement_id = req_obj.id
+            assessment.required_count = required
+            assessment.total_existing = existing_count
+            assessment.effective_existing = existing_count
+            assessment.suggested_vacancy = vacancy_gap
+        else:
+            assessment = VacancyAssessment(
+                institution_id=inst_id,
+                course_id=course.id,
+                academic_year=academic_year,
+                requirement_id=req_obj.id,
+                required_count=required,
+                total_existing=existing_count,
+                effective_existing=existing_count,
+                suggested_vacancy=vacancy_gap,
+                status="DRAFT"
+            )
+            db.add(assessment)
+        await db.commit()
+
+
         course_summary = {
             "course_id": course.id,
             "course_name": course.name,

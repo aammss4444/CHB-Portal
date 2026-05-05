@@ -20,14 +20,11 @@ from app.modules.attendance.schemas import (
     TimetableSlotUpdateRequest,
 )
 from app.modules.attendance.service import AttendanceService
-from app.modules.attendance.ai_engine import AttendanceAIEngine
-from app.modules.attendance.ai_service import AttendanceAIService
 
 
 class AttendanceController:
     def __init__(self) -> None:
         self.service = AttendanceService()
-        self.ai_service = AttendanceAIService(AttendanceAIEngine())
 
     async def create_timetable(self, db: AsyncSession, current_user: User, req: TimetableSlotCreateRequest):
         rows = await self.service.create_timetable(db, current_user, req)
@@ -35,6 +32,12 @@ class AttendanceController:
 
     async def get_timetable(self, db: AsyncSession, current_user: User, faculty_credential_id: UUID, academic_year: str):
         data = await self.service.get_timetable(db, current_user, faculty_credential_id, academic_year)
+        return {"status": "success", "data": data}
+
+    async def get_my_timetable(self, db: AsyncSession, current_user: User, academic_year: str):
+        # Resolve self-credential and fetch
+        credential, _ = await self.service._get_faculty_context(db, current_user)
+        data = await self.service.get_timetable(db, current_user, credential.id, academic_year)
         return {"status": "success", "data": data}
 
     async def update_timetable(self, db: AsyncSession, current_user: User, slot_id: UUID, req: TimetableSlotUpdateRequest):
@@ -131,12 +134,10 @@ class AttendanceController:
         data, total = await self.service.list_anomalies(
             db, current_user, faculty_credential_id, severity, is_acknowledged, institution_id, month, year, skip, limit
         )
-        ai_analysis = await self.ai_service.evaluate_anomalies(data)
         import math
         return {
             "status": "success",
             "data": data,
-            "ai_analysis": ai_analysis,
             "total": total,
             "page": (skip // limit) + 1 if limit > 0 else 1,
             "limit": limit,
@@ -165,13 +166,15 @@ class AttendanceController:
         )
         payload = {
             "faculty_id": str(log.faculty_credential_id),
-            "logs": [l.__dict__ for l in logs.scalars().all()]
+            "logs": [
+                {
+                    "date": str(l.lecture_date if hasattr(l, 'lecture_date') else l.get('lecture_date')), 
+                    "type": l.lecture_type if hasattr(l, 'lecture_type') else l.get('lecture_type'), 
+                    "hours": l.slot_number if hasattr(l, 'slot_number') else l.get('slot_number')
+                } 
+                for l in logs.scalars().all()
+            ]
         }
-        # Masking internal details if needed, but dict conversion is rough, so let's simplify
-        payload["logs"] = [
-            {"date": str(l.lecture_date), "type": l.lecture_type, "hours": l.slot_number} 
-            for l in payload["logs"]
-        ]
         
         result = await self.ai_service.analyze(payload)
         return {"status": "success", "data": result}
@@ -187,7 +190,11 @@ class AttendanceController:
             )
         )
         logs_data = [
-            {"date": str(l.lecture_date), "type": l.lecture_type, "topic": l.topic_covered}
+            {
+                "date": str(l.lecture_date if hasattr(l, 'lecture_date') else l.get('lecture_date')), 
+                "type": l.lecture_type if hasattr(l, 'lecture_type') else l.get('lecture_type'), 
+                "topic": l.topic_covered if hasattr(l, 'topic_covered') else l.get('topic_covered')
+            }
             for l in logs.scalars().all()
         ]
         payload = {
@@ -198,11 +205,43 @@ class AttendanceController:
         return {"status": "success", "data": result}
 
     async def ai_monitor(self, db: AsyncSession, current_user: User):
-        # In a real system, this would fetch from cached snapshots or process across faculties.
-        # For this requirement, return a structure matching AIMonitorResponse.
+        # 1. Fetch real stats from DB
+        from app.models.lecture_log import LectureLog, LectureLogStatus
+        from app.models.attendance_anomaly import AttendanceAnomaly
+        from sqlalchemy import select, func
+
+        total_scanned = (await db.execute(select(func.count(LectureLog.id)))).scalar_one() or 0
+        anomalies_count = (await db.execute(select(func.count(AttendanceAnomaly.id)))).scalar_one() or 0
+        
+        # Simple verification rate calculation
+        verified_count = (await db.execute(
+            select(func.count(LectureLog.id)).where(LectureLog.log_status == LectureLogStatus.VERIFIED.value)
+        )).scalar_one() or 0
+        
+        verification_rate = (verified_count / total_scanned * 100) if total_scanned > 0 else 100
+
+        # Fetch recent anomalies for the list
+        anomalies_stmt = select(AttendanceAnomaly).order_by(AttendanceAnomaly.created_at.desc()).limit(10)
+        anomalies_res = await db.execute(anomalies_stmt)
+        anomalies = anomalies_res.scalars().all()
+
         return {
+            "total_scanned": total_scanned,
+            "anomalies_count": anomalies_count,
+            "precision_score": 99.2, # Static placeholder for AI precision
+            "verification_rate": round(verification_rate, 1),
+            "anomalies": [
+                {
+                    "id": str(a.id),
+                    "issue_type": a.anomaly_type,
+                    "confidence": 95,
+                    "detected_at": a.created_at.isoformat() if a.created_at else None,
+                    "faculty_name": "Faculty Member", # In a real system, join with FacultyCredentials
+                    "institution_name": "Institution"
+                } for a in anomalies
+            ],
             "high_risk_faculty": [],
-            "common_patterns": ["Monitoring active", "No system-wide anomalies detected"],
+            "common_patterns": ["Monitoring active", f"{anomalies_count} anomalies detected"],
             "summary": "Continuous monitoring is running."
         }
 

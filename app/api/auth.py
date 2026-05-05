@@ -35,10 +35,18 @@ async def login_for_access_token(db: Session = Depends(get_db), form_data: OAuth
     access_token = create_access_token(
         subject=user.id, expires_delta=access_token_expires
     )
+    user_data = UserResponse.model_validate(user).model_dump()
+    if user.role == RoleEnum.FACULTY:
+        from app.models.faculty_credentials import FacultyCredentials
+        res = await db.execute(select(FacultyCredentials).where(FacultyCredentials.user_id == user.id))
+        cred = res.scalars().first()
+        if cred:
+            user_data["faculty_credential_id"] = str(cred.id)
+
     return {
         "access_token": access_token,
         "token_type": "bearer",
-        "user": user,
+        "user": user_data,
     }
 
 @router.post("/register", response_model=UserResponse, dependencies=[Depends(admin_only)])
@@ -129,8 +137,18 @@ async def candidate_register(user_in: CandidateRegister, db: Session = Depends(g
 
 
 @router.get("/me", response_model=UserResponse)
-async def read_users_me(current_user: User = Depends(get_current_user)):
-    return current_user
+async def read_users_me(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    user_data = UserResponse.model_validate(current_user)
+    if current_user.role == RoleEnum.FACULTY:
+        from app.models.faculty_credentials import FacultyCredentials
+        res = await db.execute(select(FacultyCredentials).where(FacultyCredentials.user_id == current_user.id))
+        cred = res.scalars().first()
+        if cred:
+            user_data.faculty_credential_id = str(cred.id)
+    return user_data
 
 @router.get("", response_model=PaginatedResponse[UserResponse])
 async def read_users(

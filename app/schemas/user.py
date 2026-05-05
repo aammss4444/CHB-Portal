@@ -9,6 +9,7 @@ class LoginUserInfo(BaseModel):
     full_name: str | None = None
     phone_number: str | None = None
     permissions: list[str] = []
+    faculty_credential_id: Optional[str] = None
 
 class Token(BaseModel):
     access_token: str
@@ -47,6 +48,7 @@ class UserResponse(BaseModel):
     phone_number: str | None = None
     institution_id: int | None = None
     permissions: list[str] = []
+    faculty_credential_id: Optional[str] = None
 
     class Config:
         from_attributes = True
