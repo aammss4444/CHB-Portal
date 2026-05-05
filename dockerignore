@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual Environments
+.venv/
+venv/
+env/
+
+# Environment Files — NEVER commit real secrets
+.env
+!.env.example
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pytest / Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Alembic
+alembic/versions/__pycache__/
+
+# Uploads (runtime data — use named Docker volume)
+uploads/
+
+# Scratch / Temp files
+scratch/
+
+# Postman / Docs (not needed in the image)
+*.postman_collection.json
+Docs/
+*.pdf
+frontend_step3_step4_api_reference.txt
+frontend_step3_step4_api_reference.pdf
+STEP1_API_CONTRACT.md
+README.md

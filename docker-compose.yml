@@ -1,0 +1,53 @@
+services:
+  # ─────────────────────────────────────────────
+  # FastAPI Application
+  # ─────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chb_api
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      ENV: production
+      DEBUG: "False"
+      WORKERS: ${WORKERS:-4}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - uploads_data:/app/uploads   # Persist uploaded files across restarts
+    ports:
+      - "${API_PORT:-8000}:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # Reach host's PostgreSQL
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
+      - chb_network
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 1024M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+
+# ─────────────────────────────────────────────
+# Named Volumes — uploads persist across restarts
+# ─────────────────────────────────────────────
+volumes:
+  uploads_data:
+    driver: local
+
+# ─────────────────────────────────────────────
+# Internal network
+# ─────────────────────────────────────────────
+networks:
+  chb_network:
+    driver: bridge
