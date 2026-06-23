@@ -142,7 +142,7 @@ async def list_bills(
     )
 
 
-@router.get("/bills/summary", dependencies=[Depends(RoleChecker([RoleEnum.PRINCIPAL, RoleEnum.ADMIN]))])
+@router.get("/bills/summary", dependencies=[Depends(RoleChecker([RoleEnum.PRINCIPAL, RoleEnum.ADMIN, RoleEnum.RO, RoleEnum.TREASURY]))])
 async def get_bill_summary(
     institution_id: Optional[int] = Query(None),
     academic_year: Optional[str] = Query(None),

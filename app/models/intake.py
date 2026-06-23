@@ -13,4 +13,4 @@ class IntakeDefinition(Base):
     actual_admitted = Column(Integer, nullable=False)
 
     course = relationship("Course", back_populates="intakes")
-    faculty_requirements = relationship("FacultyRequirement", back_populates="intake", cascade="all, delete-orphan")
+    faculty_requirements = relationship("FacultyRequirement", back_populates="intake", cascade="all, delete-orphan", passive_deletes=True)

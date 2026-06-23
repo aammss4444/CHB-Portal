@@ -14,7 +14,7 @@ class FacultyRequirement(Base):
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     intake = relationship("IntakeDefinition", back_populates="faculty_requirements")
-    anomalies = relationship("RequirementAnomaly", back_populates="requirement", cascade="all, delete-orphan")
+    anomalies = relationship("RequirementAnomaly", back_populates="requirement", cascade="all, delete-orphan", passive_deletes=True)
 
 class RequirementAnomaly(Base):
     __tablename__ = "requirement_anomalies"

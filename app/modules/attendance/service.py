@@ -21,7 +21,7 @@ from app.models.faculty_credentials import FacultyCredentials
 from app.models.institution import Course
 from app.models.lecture_log import LectureLog, LectureLogStatus, LectureLogType
 from app.models.lecture_log_audit import LectureLogAudit, LectureLogAuditAction
-from app.models.timetable_slot import TimetableLectureType, TimetableSlot, WeekDayEnum
+from app.models.timetable_slot import TimetableLectureType, TimetableSlot
 from app.models.user import RoleEnum, User
 from app.modules.attendance.attendance_anomaly_engine import run_attendance_anomaly_check
 from app.modules.attendance.schemas import (
@@ -49,8 +49,8 @@ class AttendanceService:
         raise HTTPException(status_code=status_code, detail={"code": code, "message": message})
 
     @staticmethod
-    def _entity_id_from_uuid(value: UUID) -> int:
-        return value.int % 2147483647
+    def _entity_id_from_uuid(value: UUID) -> str:
+        return str(value)
 
     @staticmethod
     def _day_name(value: date) -> str:
@@ -64,7 +64,7 @@ class AttendanceService:
         self,
         db: AsyncSession,
         entity_name: str,
-        entity_id: int,
+        entity_id: str,
         action: str,
         user_id: int,
         old_value: Optional[dict[str, Any]] = None,
@@ -195,7 +195,8 @@ class AttendanceService:
                 select(TimetableSlot).where(
                     TimetableSlot.faculty_credential_id == faculty_credential_id,
                     TimetableSlot.academic_year == academic_year,
-                    TimetableSlot.day_of_week == self._day_name(lecture_date),
+                    TimetableSlot.academic_year == academic_year,
+                    TimetableSlot.calendar_date == lecture_date,
                     TimetableSlot.slot_number == slot_number,
                     TimetableSlot.is_active.is_(True),
                 )
@@ -215,7 +216,8 @@ class AttendanceService:
                     select(func.count(TimetableSlot.id)).where(
                         TimetableSlot.faculty_credential_id == faculty_credential_id,
                         TimetableSlot.academic_year == academic_year,
-                        TimetableSlot.day_of_week == self._day_name(attendance_date),
+                        TimetableSlot.academic_year == academic_year,
+                        TimetableSlot.calendar_date == attendance_date,
                         TimetableSlot.is_active.is_(True),
                     )
                 )
@@ -241,7 +243,7 @@ class AttendanceService:
                 await db.execute(
                     select(TimetableSlot).where(
                         TimetableSlot.faculty_credential_id == req.faculty_credential_id,
-                        TimetableSlot.day_of_week == slot.day_of_week,
+                        TimetableSlot.calendar_date == slot.calendar_date,
                         TimetableSlot.academic_year == req.academic_year,
                         TimetableSlot.is_active.is_(True),
                         TimetableSlot.start_time < slot.end_time,
@@ -257,7 +259,7 @@ class AttendanceService:
                 course_id=appointment.course_id,
                 faculty_credential_id=req.faculty_credential_id,
                 academic_year=req.academic_year,
-                day_of_week=slot.day_of_week,
+                calendar_date=slot.calendar_date,
                 slot_number=slot.slot_number,
                 start_time=slot.start_time,
                 end_time=slot.end_time,
@@ -280,7 +282,7 @@ class AttendanceService:
                 current_user.id,
                 new_value={
                     "faculty_credential_id": str(slot.faculty_credential_id),
-                    "day_of_week": slot.day_of_week,
+                    "calendar_date": slot.calendar_date.isoformat(),
                     "slot_number": slot.slot_number,
                     "academic_year": slot.academic_year,
                 },
@@ -292,32 +294,36 @@ class AttendanceService:
         self,
         db: AsyncSession,
         current_user: User,
-        faculty_credential_id: UUID,
+        faculty_credential_id: Optional[UUID],
         academic_year: str,
     ) -> dict[str, list[dict[str, Any]]]:
         """Return weekly timetable grouped by day."""
-        credential = await self._get_credential_or_404(db, faculty_credential_id)
+        resolved_credential_id = faculty_credential_id
         if current_user.role == RoleEnum.FACULTY:
             own_credential, _ = await self._get_faculty_context(db, current_user)
-            if own_credential.id != faculty_credential_id:
+            if resolved_credential_id and own_credential.id != resolved_credential_id:
                 self._raise_error(403, "UNAUTHORIZED_ACCESS", "Faculty can view only their own timetable")
+            resolved_credential_id = own_credential.id
         elif current_user.role == RoleEnum.PRINCIPAL:
+            if not resolved_credential_id:
+                self._raise_error(400, "HTTP_ERROR", "faculty_credential_id is required")
+            credential = await self._get_credential_or_404(db, resolved_credential_id)
             await self._ensure_principal_scope(current_user, credential.institution_id)
 
         rows = (
             await db.execute(
                 select(TimetableSlot)
                 .where(
-                    TimetableSlot.faculty_credential_id == faculty_credential_id,
+                    TimetableSlot.faculty_credential_id == resolved_credential_id,
                     TimetableSlot.academic_year == academic_year,
                 )
-                .order_by(TimetableSlot.day_of_week.asc(), TimetableSlot.slot_number.asc())
+                .order_by(TimetableSlot.calendar_date.asc(), TimetableSlot.slot_number.asc())
             )
         ).scalars().all()
 
         grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
-            grouped[row.day_of_week].append(TimetableSlotResponse.model_validate(row, from_attributes=True).model_dump())
+            grouped[row.calendar_date.isoformat()].append(TimetableSlotResponse.model_validate(row, from_attributes=True).model_dump())
         return dict(grouped)
 
     async def update_timetable_slot(
@@ -476,17 +482,10 @@ class AttendanceService:
         db: AsyncSession,
         current_user: User,
         req: LectureLogCreateRequest,
-    ) -> tuple[FacultyCredentials, AppointmentLetter, Optional[TimetableSlot], Optional[DailyAttendanceSummary], str]:
+    ) -> tuple[FacultyCredentials, AppointmentLetter, Optional[TimetableSlot], Optional[DailyAttendanceSummary]]:
         credential, appointment = await self._get_faculty_context(db, current_user)
         await self._ensure_credential_active(credential)
-        if req.lecture_date > date.today():
-            self._raise_error(400, "FUTURE_DATE_NOT_ALLOWED", "Lecture date cannot be in the future")
-        if req.lecture_date < appointment.joining_date:
-            self._raise_error(
-                400,
-                "LOG_BEFORE_JOINING_DATE",
-                "Lecture log cannot be created before the faculty joining date",
-            )
+
         calendar_entry = await self._get_calendar_entry(db, credential.institution_id, appointment.academic_year, req.lecture_date)
         if calendar_entry and calendar_entry.day_type == CalendarDayType.HOLIDAY.value:
             self._raise_error(400, "CANNOT_LOG_ON_HOLIDAY", "Lecture logs cannot be created on holidays")
@@ -498,7 +497,7 @@ class AttendanceService:
             self._raise_error(400, "SUBSTITUTE_FACULTY_REQUIRED", "Substitute faculty must be specified")
         if not req.is_extra:
             slot = await self._get_slot_match(db, credential.id, appointment.academic_year, req.lecture_date, req.slot_number)
-        return credential, appointment, slot, summary, self._day_name(req.lecture_date)
+        return credential, appointment, slot, summary
 
     async def create_log(
         self,
@@ -507,7 +506,7 @@ class AttendanceService:
         req: LectureLogCreateRequest,
     ) -> LectureLog:
         """Create a draft lecture log for the current faculty user."""
-        credential, appointment, slot, _, day_of_week = await self._build_faculty_log_payload(db, current_user, req)
+        credential, appointment, slot, _ = await self._build_faculty_log_payload(db, current_user, req)
         duplicate = (
             await db.execute(
                 select(LectureLog.id).where(
@@ -536,7 +535,6 @@ class AttendanceService:
             course_id=appointment.course_id,
             academic_year=appointment.academic_year,
             lecture_date=req.lecture_date,
-            day_of_week=day_of_week,
             slot_number=req.slot_number,
             start_time=start_time,
             end_time=end_time,
@@ -545,6 +543,8 @@ class AttendanceService:
             class_name=req.class_name,
             topic_covered=req.topic_covered,
             attendance_count=req.attendance_count,
+            latitude=req.latitude,
+            longitude=req.longitude,
             is_extra=req.is_extra,
             is_substitute=req.is_substitute,
             substitute_for_faculty_id=req.substitute_for_faculty_id,
@@ -1086,7 +1086,7 @@ class AttendanceService:
                 lecture_log=LectureLogInput(
                     faculty_credential_id=lecture_log.faculty_credential_id,
                     lecture_date=lecture_log.lecture_date,
-                    day_of_week=lecture_log.day_of_week,
+                    calendar_date=lecture_log.lecture_date,
                     slot_number=lecture_log.slot_number,
                     subject_name=lecture_log.subject_name,
                     topic_covered=lecture_log.topic_covered,
@@ -1100,7 +1100,7 @@ class AttendanceService:
                     LectureLogInput(
                         faculty_credential_id=row.faculty_credential_id,
                         lecture_date=row.lecture_date,
-                        day_of_week=row.day_of_week,
+                        calendar_date=row.lecture_date,
                         slot_number=row.slot_number,
                         subject_name=row.subject_name,
                         topic_covered=row.topic_covered,
@@ -1114,7 +1114,7 @@ class AttendanceService:
                 ],
                 timetable_slots=[
                     TimetableSlotInput(
-                        day_of_week=row.day_of_week,
+                        calendar_date=row.calendar_date,
                         slot_number=row.slot_number,
                         subject_name=row.subject_name,
                         class_name=row.class_name,

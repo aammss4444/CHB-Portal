@@ -164,13 +164,17 @@ class VacancyService:
         await db.commit()
         return {"status": "success", "message": "Faculty permanently removed from system"}
 
-    async def get_faculty_list(self, db: AsyncSession, institution_id: int, course_id: int, academic_year: str, skip: int = 0, limit: Optional[int] = None):
-        base_filter = and_(
+    async def get_faculty_list(self, db: AsyncSession, institution_id: int, course_id: Optional[int], academic_year: Optional[str], skip: int = 0, limit: Optional[int] = None):
+        conditions = [
             ExistingFaculty.institution_id == institution_id,
-            ExistingFaculty.course_id == course_id,
-            ExistingFaculty.academic_year == academic_year,
             ExistingFaculty.status != "DELETED"
-        )
+        ]
+        if course_id is not None:
+            conditions.append(ExistingFaculty.course_id == course_id)
+        if academic_year is not None:
+            conditions.append(ExistingFaculty.academic_year == academic_year)
+            
+        base_filter = and_(*conditions)
 
         total_stmt = select(func.count()).select_from(ExistingFaculty).where(base_filter)
         total_res = await db.execute(total_stmt)
@@ -206,8 +210,6 @@ class VacancyService:
         req_stmt = select(FacultyRequirement).filter(FacultyRequirement.intake_id == intake.id)
         req_res = await db.execute(req_stmt)
         requirement = req_res.scalars().first()
-        if not requirement:
-            raise HTTPException(status_code=400, detail="Faculty Requirement not generated yet (Step 1)")
 
         from app.modules.requirements.norm_service import resolve_norm as svc_resolve_norm
         from app.modules.requirements.norms_service import derive_course_category
@@ -226,6 +228,38 @@ class VacancyService:
                 "Non-Engineering (Applied Sciences)": CourseCategory.APPLIED_SCIENCES,
             }
             course_cat = _legacy_map.get(legacy_cat)
+
+        if not requirement:
+            # Auto-generate the requirement if missing
+            import math
+            try:
+                norm = await svc_resolve_norm(
+                    institution_id=institution_id,
+                    academic_year=academic_year,
+                    course_id=course_id,
+                    course_category=course_cat,
+                    db=db,
+                )
+                calc_base = max(intake.approved_seats, intake.actual_admitted)
+                required = math.ceil(calc_base / norm.faculty_student_ratio)
+                
+                formula_json = {
+                    "base_used": calc_base,
+                    "norm_ratio_applied": norm.faculty_student_ratio,
+                    "calculation": f"ceil({calc_base} / {norm.faculty_student_ratio})",
+                    "course_level": course_obj.level if course_obj else None,
+                    "norm_type": norm.norm_type,
+                    "course_category": norm.course_category or (course_cat.value if course_cat else None),
+                    "grade_requirement": norm.grade_requirement,
+                }
+                
+                requirement = FacultyRequirement(intake_id=intake.id, computed_required_count=required, formula_breakdown=formula_json)
+                db.add(requirement)
+                await db.commit()
+                await db.refresh(requirement)
+            except Exception as e:
+                print(f"DEBUG: Failed to auto-generate requirement: {e}")
+                raise HTTPException(status_code=400, detail="Faculty Requirement not generated yet (Step 1) and auto-generation failed. Ensure Norms are set.")
 
         norm = await svc_resolve_norm(institution_id, academic_year, course_id, course_cat, db)
         norm_info = {

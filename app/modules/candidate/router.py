@@ -51,3 +51,15 @@ async def add_experience(
     current_user: User = Depends(get_current_user),
 ):
     return await controller.add_experience(db, current_user, req)
+
+
+@router.get("/candidates/{candidate_id}/profile")
+async def get_candidate_profile(
+    candidate_id: str,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if current_user.role not in [RoleEnum.ADMIN, RoleEnum.PRINCIPAL]:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=403, detail="Not authorized to view candidate profile")
+    return await controller.get_profile_by_id(db, candidate_id)

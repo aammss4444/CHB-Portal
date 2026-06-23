@@ -42,7 +42,7 @@ async def list_advertisements(
 
 @router.post(
     "/generate",
-    response_model=AIAdvertisementGenerationEnvelope,
+    response_model=AdvertisementEnvelope,
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(admin_or_principal)],
 )

@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class TimetableSlotEntryRequest(BaseModel):
-    day_of_week: str
+    calendar_date: date
     slot_number: int = Field(..., ge=1, le=8)
     start_time: time
     end_time: time
@@ -38,7 +38,7 @@ class TimetableSlotResponse(BaseModel):
     course_id: int
     faculty_credential_id: UUID
     academic_year: str
-    day_of_week: str
+    calendar_date: date
     slot_number: int
     start_time: time
     end_time: time
@@ -81,6 +81,10 @@ class LectureLogCreateRequest(BaseModel):
     class_name: Optional[str] = None
     topic_covered: str
     attendance_count: Optional[int] = None
+    ai_attendance_count: Optional[int] = None
+    manual_attendance_count: Optional[int] = None
+    latitude: float
+    longitude: float
     is_extra: bool = False
     is_substitute: bool = False
     substitute_for_faculty_id: Optional[UUID] = None
@@ -89,6 +93,8 @@ class LectureLogCreateRequest(BaseModel):
 class LectureLogUpdateRequest(BaseModel):
     topic_covered: Optional[str] = None
     attendance_count: Optional[int] = None
+    ai_attendance_count: Optional[int] = None
+    manual_attendance_count: Optional[int] = None
     subject_name: Optional[str] = None
     lecture_type: Optional[str] = None
     class_name: Optional[str] = None
@@ -140,7 +146,6 @@ class LectureLogResponse(BaseModel):
     course_id: int
     academic_year: str
     lecture_date: date
-    day_of_week: str
     slot_number: int
     start_time: time
     end_time: time
@@ -149,6 +154,10 @@ class LectureLogResponse(BaseModel):
     class_name: Optional[str] = None
     topic_covered: str
     attendance_count: Optional[int] = None
+    ai_attendance_count: Optional[int] = None
+    manual_attendance_count: Optional[int] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     is_extra: bool
     is_substitute: bool
     substitute_for_faculty_id: Optional[UUID] = None
@@ -222,11 +231,15 @@ class BulkSubmitResponse(BaseModel):
 class LectureLogInput(BaseModel):
     faculty_credential_id: UUID
     lecture_date: date
-    day_of_week: str
+    calendar_date: date
     slot_number: int
     subject_name: str
     topic_covered: str
     attendance_count: Optional[int] = None
+    ai_attendance_count: Optional[int] = None
+    manual_attendance_count: Optional[int] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     class_name: Optional[str] = None
     created_at: datetime
     log_status: str = "DRAFT"
@@ -234,7 +247,7 @@ class LectureLogInput(BaseModel):
 
 
 class TimetableSlotInput(BaseModel):
-    day_of_week: str
+    calendar_date: date
     slot_number: int
     subject_name: str
     class_name: Optional[str] = None

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, ForeignKey
+from sqlalchemy import Column, Integer, String, ForeignKey, Float
 from sqlalchemy.orm import relationship
 from app.db.session import Base
 
@@ -11,8 +11,10 @@ class Institution(Base):
     code = Column(String, unique=True, index=True, nullable=False)
     district = Column(String, nullable=False)
     type = Column(String, nullable=False)  # e.g., Govt, Aided, Unaided
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
 
-    courses = relationship("Course", back_populates="institution", cascade="all, delete-orphan")
+    courses = relationship("Course", back_populates="institution", cascade="all, delete-orphan", passive_deletes=True)
 
 
 class Course(Base):
@@ -29,4 +31,4 @@ class Course(Base):
     level = Column(String, nullable=False)  # e.g., Diploma, Degree, D.Pharm
 
     institution = relationship("Institution", back_populates="courses")
-    intakes = relationship("IntakeDefinition", back_populates="course", cascade="all, delete-orphan")
+    intakes = relationship("IntakeDefinition", back_populates="course", cascade="all, delete-orphan", passive_deletes=True)

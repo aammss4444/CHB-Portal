@@ -8,6 +8,65 @@ logger = logging.getLogger(__name__)
 
 
 class SelectionAIEngine:
+    async def generate_ai_rankings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate candidate rankings from scratch using LLM.
+        Expected keys in payload: 'candidates', 'vacancy_count'.
+        """
+        prompt = f"""
+You are an expert HR Selection AI Engine for an enterprise faculty recruitment portal.
+Your task is to rank the following candidates based on their data.
+
+Available Vacancies: {payload.get('vacancy_count', 0)}
+
+Candidates Data:
+{json.dumps(payload.get('candidates', []), indent=2)}
+
+Instructions for Ranking:
+1. Compare candidates holistically based on:
+   - Minimum Qualification (e.g. PhD is better than ME/MTech, which is better than BE/BTech).
+   - Marks % (Percentage marks in their highest degree).
+   - Experience in Years (More teaching experience is better).
+   - Interview Score (out of 100).
+   - Number of publications.
+2. Generate a 'final_score' out of 100 for each candidate based on your holistic evaluation.
+3. Assign a 'rank' (integer, 1 being the best) to each candidate based on the final_score. Do not use duplicate ranks.
+4. Set 'result_status' to "SELECTED" if rank <= Vacancies, otherwise "WAITLISTED" (up to 3 places after vacancies), and "REJECTED" for the rest.
+5. Provide a short 'reason' explaining why this candidate received this rank compared to others.
+
+Return STRICT JSON adhering to this exact schema (no markdown, no backticks, just JSON):
+{{
+  "rankings": [
+    {{
+      "application_id": "uuid-string-here",
+      "candidate_id": "uuid-string-here",
+      "final_score": 85.5,
+      "rank": 1,
+      "result_status": "SELECTED",
+      "waitlist_position": null,
+      "reason": "Highest qualification with excellent interview score and 5 years of experience."
+    }}
+  ]
+}}
+"""
+        raw = await call_llm_selection(prompt)
+
+        if not raw:
+            logger.warning("AI Ranking failed to return content.")
+            return {"rankings": []}
+
+        try:
+            if "```json" in raw:
+                raw = raw.split("```json")[1].split("```")[0].strip()
+            elif "```" in raw:
+                raw = raw.split("```")[1].split("```")[0].strip()
+                
+            parsed = json.loads(raw)
+            return parsed
+        except Exception as e:
+            logger.error(f"Failed to parse AI Ranking JSON: {str(e)} | Raw: {raw}")
+            return {"rankings": []}
+
     async def analyze(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Analyze candidate selection data using LLM.

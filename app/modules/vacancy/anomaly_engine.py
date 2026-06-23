@@ -51,11 +51,21 @@ def check_individual_faculty(
 
         # Qualification Check
         if min_qual and faculty.qualification:
-            if min_qual not in faculty.qualification.lower():
+            import re
+            fac_qual_clean = re.sub(r'[^a-z0-9]', '', faculty.qualification.lower())
+            min_qual_clean = re.sub(r'[^a-z0-9]', '', min_qual.lower())
+            
+            print(f"DEBUG: fac_qual_clean='{fac_qual_clean}', min_qual_clean='{min_qual_clean}'")
+            print(f"DEBUG: fac in min: {fac_qual_clean in min_qual_clean}, min in fac: {min_qual_clean in fac_qual_clean}")
+            
+            if fac_qual_clean not in min_qual_clean and min_qual_clean not in fac_qual_clean:
+                print("DEBUG: Entered anomaly block!")
                 found = False
                 if hasattr(faculty, "qualifications_list") and faculty.qualifications_list:
                     for q in faculty.qualifications_list:
-                        if min_qual in q.degree.lower():
+                        if not q.degree: continue
+                        q_deg_clean = re.sub(r'[^a-z0-9]', '', q.degree.lower())
+                        if q_deg_clean in min_qual_clean or min_qual_clean in q_deg_clean:
                             found = True
                             break
                 

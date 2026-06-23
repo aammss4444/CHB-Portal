@@ -1,4 +1,5 @@
 from uuid import UUID
+from typing import Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.modules.vacancy.service import VacancyService
 from app.modules.vacancy.schemas import (
@@ -24,7 +25,7 @@ class VacancyController:
         faculty = await self.service.update_faculty(db, current_user.id, faculty_id, req)
         return {"status": "success", "data": faculty}
 
-    async def get_faculty_list(self, db: AsyncSession, current_user: User, institution_id: int, course_id: int, academic_year: str, skip: int = 0, limit: int = 100):
+    async def get_faculty_list(self, db: AsyncSession, current_user: User, institution_id: int, course_id: Optional[int], academic_year: Optional[str], skip: int = 0, limit: int = 100):
         items, total, effective, non_effective = await self.service.get_faculty_list(db, institution_id, course_id, academic_year, skip, limit)
         import math
         return {
@@ -99,8 +100,17 @@ class VacancyController:
             {
                 "full_name": f.full_name,
                 "designation": f.designation,
-                "age": _get_age(f.date_of_birth),
+                "age_approx": _get_age(f.date_of_birth),
                 "qualification": f.qualification,
+                "specialization": f.specialization,
+                "employment_type": f.employment_type,
+                "qualifications_list": [
+                    {
+                        "degree": q.degree,
+                        "specialization": q.specialization,
+                        "is_highest": q.is_highest
+                    } for q in f.qualifications_list
+                ] if hasattr(f, "qualifications_list") else [],
                 "status": f.status
             } for f in faculty_items
         ]

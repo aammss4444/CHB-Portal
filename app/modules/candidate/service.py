@@ -24,7 +24,7 @@ from app.modules.candidate.schemas import (
 )
 
 
-MOBILE_PATTERN = re.compile(r"^[6-9]\d{9}$")
+MOBILE_PATTERN = re.compile(r"^(?:\+91[-.\s]?)?[6-9]\d{9}$")
 
 
 class CandidateService:
@@ -202,8 +202,8 @@ class CandidateService:
         refreshed = await self._get_candidate_or_404(db, current_user.id)
         return refreshed
 
-    async def get_profile(self, db: AsyncSession, current_user: User) -> Candidate:
-        return await self._get_candidate_or_404(db, current_user.id)
+    async def get_profile(self, db: AsyncSession, current_user: User) -> Optional[Candidate]:
+        return await self._get_candidate_by_user(db, current_user.id)
 
     async def add_qualifications(
         self, db: AsyncSession, current_user: User, req: QualificationBulkRequest
@@ -293,3 +293,17 @@ class CandidateService:
         )
         await db.commit()
         return created
+
+    async def get_profile_by_candidate_id(self, db: AsyncSession, candidate_id: str) -> Candidate:
+        stmt = (
+            select(Candidate)
+            .where(Candidate.id == candidate_id)
+            .options(
+                selectinload(Candidate.qualifications),
+                selectinload(Candidate.experiences),
+            )
+        )
+        candidate = (await db.execute(stmt)).scalars().first()
+        if not candidate:
+            self._raise_error(404, "NOT_FOUND", "Candidate profile not found")
+        return candidate

@@ -8,12 +8,17 @@ class LoginUserInfo(BaseModel):
     role: RoleEnum
     full_name: str | None = None
     phone_number: str | None = None
+    institution_id: int | None = None
     permissions: list[str] = []
 
 class Token(BaseModel):
     access_token: str
+    refresh_token: str
     token_type: str
     user: LoginUserInfo
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
 
 class UserCreate(BaseModel):
     email: EmailStr

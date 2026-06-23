@@ -91,6 +91,7 @@ class VacancyAIEngine:
             {
                 "designation": f.get("designation"),
                 "qualification": f.get("qualification"),
+                "qualifications_list": f.get("qualifications_list", []),
                 "specialization": f.get("specialization"),
                 "employment": f.get("employment_type"),
                 "age_approx": f.get("age_approx", "Unknown")

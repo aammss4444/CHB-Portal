@@ -175,47 +175,53 @@ class AdvertisementService:
                 message="An active advertisement already exists for this institution, Course, and academic year",
             )
 
-        templates = (
-            await db.execute(
-                select(AdvertisementTemplate)
-                .where(
-                    and_(
-                        AdvertisementTemplate.is_active.is_(True),
-                        AdvertisementTemplate.language.in_(["EN", "MR"]),
+        content_en = req.content_en
+        content_mr = req.content_mr
+
+        if not content_en or not content_mr:
+            templates = (
+                await db.execute(
+                    select(AdvertisementTemplate)
+                    .where(
+                        and_(
+                            AdvertisementTemplate.is_active.is_(True),
+                            AdvertisementTemplate.language.in_(["EN", "MR"]),
+                        )
                     )
+                    .order_by(AdvertisementTemplate.created_at.desc())
                 )
-                .order_by(AdvertisementTemplate.created_at.desc())
-            )
-        ).scalars().all()
+            ).scalars().all()
 
-        tpl_en = next((tpl for tpl in templates if tpl.language == "EN"), None)
-        tpl_mr = next((tpl for tpl in templates if tpl.language == "MR"), None)
-        if not tpl_en or not tpl_mr:
-            self._raise_error(
-                status_code=404,
-                code="TEMPLATE_NOT_FOUND",
-                message="Active templates for both EN and MR are required",
-            )
+            tpl_en = next((tpl for tpl in templates if tpl.language == "EN"), None)
+            tpl_mr = next((tpl for tpl in templates if tpl.language == "MR"), None)
+            if not tpl_en or not tpl_mr:
+                self._raise_error(
+                    status_code=404,
+                    code="TEMPLATE_NOT_FOUND",
+                    message="Active templates for both EN and MR are required",
+                )
 
-        # 5. Render Content
-        context = {
-            "institution_name": institution_name,
-            "course_name": course_name,
-            "vacancy_count": assessment.confirmed_vacancy,
-            "academic_year": assessment.academic_year,
-            "application_deadline": req.application_end_date.strftime("%d %B %Y"),
-            "designation": "Clock Hour Basis Lecturer",
-            "qualification": req.qualification_requirements,
-            "required_documents": req.required_documents,
-            "important_instructions": req.important_instructions,
-            "interview_venue": req.interview_venue,
-        }
+            # 5. Render Content
+            context = {
+                "institution_name": institution_name,
+                "course_name": course_name,
+                "vacancy_count": assessment.confirmed_vacancy,
+                "academic_year": assessment.academic_year,
+                "application_deadline": req.application_end_date.strftime("%d %B %Y"),
+                "designation": "Clock Hour Basis Lecturer",
+                "qualification": req.qualification_requirements,
+                "required_documents": req.required_documents,
+                "important_instructions": req.important_instructions,
+                "interview_venue": req.interview_venue,
+            }
 
-        try:
-            content_en = render_advertisement(tpl_en.template_body, context)
-            content_mr = render_advertisement(tpl_mr.template_body, context)
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Template rendering failed: {str(e)}")
+            try:
+                if not content_en:
+                    content_en = render_advertisement(tpl_en.template_body, context)
+                if not content_mr:
+                    content_mr = render_advertisement(tpl_mr.template_body, context)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Template rendering failed: {str(e)}")
 
         # 6. Save
         ad = Advertisement(
@@ -338,12 +344,7 @@ class AdvertisementService:
 
         self._validate_date_range(ad.application_start_date, ad.application_end_date)
 
-        if ad.application_end_date < date.today() + timedelta(days=7):
-            self._raise_error(
-                status_code=400,
-                code="INVALID_DATE_RANGE",
-                message="application_end_date must be at least 7 days from today",
-            )
+
 
         if not ad.content_en.strip() or not ad.content_mr.strip():
             self._raise_error(

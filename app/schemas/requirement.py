@@ -65,6 +65,8 @@ class InstitutionResponse(BaseModel):
     code: str
     district: str
     type: str
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     courses: List[CourseResponse] = []
 
     class Config:
@@ -81,6 +83,8 @@ class InstitutionUpdate(BaseModel):
     code: Optional[str] = None
     district: Optional[str] = None
     type: Optional[str] = None
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
 
 
 # --- Intake & Requirements ---

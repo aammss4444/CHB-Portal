@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from fastapi import BackgroundTasks
+from fastapi import BackgroundTasks, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.models.lecture_log import LectureLog
@@ -33,7 +33,7 @@ class AttendanceController:
         rows = await self.service.create_timetable(db, current_user, req)
         return {"status": "success", "data": [row.id for row in rows]}
 
-    async def get_timetable(self, db: AsyncSession, current_user: User, faculty_credential_id: UUID, academic_year: str):
+    async def get_timetable(self, db: AsyncSession, current_user: User, faculty_credential_id: Optional[UUID], academic_year: str):
         data = await self.service.get_timetable(db, current_user, faculty_credential_id, academic_year)
         return {"status": "success", "data": data}
 
@@ -211,3 +211,38 @@ class AttendanceController:
         result = await self.ai_analysis(db, current_user, faculty_credential_id)
         # Assuming we just return the result indicating it was stored
         return {"status": "success", "message": "Snapshot saved successfully", "data": result["data"]}
+
+    async def count_faces(self, file: UploadFile):
+        contents = await file.read()
+        import base64
+        base64_image = base64.b64encode(contents).decode('utf-8')
+        
+        from app.services.openai_client import call_llm_count_faces
+        
+        # Call the OpenAI Vision API to count the faces
+        face_count = await call_llm_count_faces(base64_image)
+        
+        if face_count is not None:
+            return {"status": "success", "data": {"face_count": face_count}}
+        else:
+            # Fallback to OpenCV if LLM fails
+            import cv2
+            import numpy as np
+            nparr = np.frombuffer(contents, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            
+            if img is None:
+                return {"status": "error", "message": "Invalid image file"}
+                
+            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            gray = cv2.equalizeHist(gray)
+            
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            faces = face_cascade.detectMultiScale(
+                gray,
+                scaleFactor=1.05,
+                minNeighbors=2,
+                minSize=(20, 20)
+            )
+            
+            return {"status": "success", "data": {"face_count": len(faces)}}

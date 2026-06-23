@@ -27,44 +27,18 @@ class AdvertisementController:
 
     async def generate_advertisement(self, db: AsyncSession, current_user: User, req: AdvertisementGenerateRequest):
         try:
-            # 1. Generate template-based ad (Deterministic)
             ad = await self.service.generate_advertisement(db, current_user, req)
-            
-            # 2. Fetch context for AI
-            from sqlalchemy import select
-            from app.models.institution import Institution, Course
-            inst = (await db.execute(select(Institution).filter(Institution.id == ad.institution_id))).scalars().first()
-            course_obj = (await db.execute(select(Course).filter(Course.id == ad.course_id))).scalars().first()
-            
-            # 3. Call AI Service
-            ai_result = await self.ai_service.generate(
-                {
-                    "institution_name": inst.name if inst else "Unknown",
-                    "course_name": course_obj.name if course_obj else "Unknown",
-                    "course_level": course_obj.level if course_obj else "UG",
-                    "vacancy_count": ad.vacancy_count,
-                    "qualification": ad.qualification_requirements,
-                    "reservation": {"SC": 13, "ST": 7, "OBC": 19, "EWS": 10},
-                    "deadline": ad.application_end_date.isoformat() if ad.application_end_date else None,
-                    "application_mode": "Walk-in",
-                }
-            )
-            
             from app.modules.advertisement.schemas import AdvertisementResponse
             return {
                 "status": "success",
-                "data": {
-                    "template_ad": AdvertisementResponse.model_validate(ad),
-                    "ai_enhanced_ad": {
-                        "english": ai_result.get("english", ""),
-                        "marathi": ai_result.get("marathi", ""),
-                        "issues": ai_result.get("issues", []),
-                        "confidence_score": ai_result.get("confidence_score", 0.0),
-                        "sections_present": ai_result.get("sections_present", {})
-                    }
-                }
+                "data": AdvertisementResponse.model_validate(ad)
             }
+        except HTTPException:
+            raise
         except Exception as e:
+            import traceback
+            with open('D:/chb2/CHB/backend/scratch/traceback.txt', 'w') as f:
+                traceback.print_exc(file=f)
             logger.exception("CRITICAL: generate_advertisement crashed")
             raise HTTPException(status_code=500, detail=str(e))
 

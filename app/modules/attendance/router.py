@@ -41,10 +41,10 @@ async def create_timetable(
     return await controller.create_timetable(db, current_user, req)
 
 
-@router.get("/timetable/{faculty_credential_id}", dependencies=[Depends(staff_or_faculty)])
+@router.get("/timetable", dependencies=[Depends(staff_or_faculty)])
 async def get_timetable(
-    faculty_credential_id: UUID,
     academic_year: str = Query(...),
+    faculty_credential_id: Optional[UUID] = Query(None),
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -215,3 +215,12 @@ async def ai_snapshot(
     current_user: User = Depends(get_current_user),
 ):
     return await controller.ai_snapshot(db, current_user, faculty_credential_id)
+
+from fastapi import UploadFile, File
+
+@router.post("/ai-face-count", dependencies=[Depends(faculty_only)])
+async def ai_face_count(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+):
+    return await controller.count_faces(file)

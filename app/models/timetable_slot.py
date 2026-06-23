@@ -1,20 +1,11 @@
 import enum
 import uuid
 
-from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String, Time, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String, Time, UniqueConstraint, Date
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.sql import func
 
 from app.db.session import Base
-
-
-class WeekDayEnum(str, enum.Enum):
-    MONDAY = "MONDAY"
-    TUESDAY = "TUESDAY"
-    WEDNESDAY = "WEDNESDAY"
-    THURSDAY = "THURSDAY"
-    FRIDAY = "FRIDAY"
-    SATURDAY = "SATURDAY"
 
 
 class TimetableLectureType(str, enum.Enum):
@@ -30,10 +21,10 @@ class TimetableSlot(Base):
             "institution_id",
             "course_id",
             "faculty_credential_id",
-            "day_of_week",
+            "calendar_date",
             "slot_number",
             "academic_year",
-            name="uq_timetable_faculty_slot_day_year",
+            name="uq_timetable_faculty_slot_date_year",
         ),
     )
 
@@ -42,7 +33,7 @@ class TimetableSlot(Base):
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
     faculty_credential_id = Column(UUID(as_uuid=True), ForeignKey("faculty_credentials.id"), nullable=False)
     academic_year = Column(String(20), nullable=False)
-    day_of_week = Column(Enum(WeekDayEnum, name="attendance_weekday_enum", create_type=False), nullable=False)
+    calendar_date = Column(Date, nullable=False)
     slot_number = Column(Integer, nullable=False)
     start_time = Column(Time, nullable=False)
     end_time = Column(Time, nullable=False)

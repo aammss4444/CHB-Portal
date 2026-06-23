@@ -23,6 +23,7 @@ from app.models.vacancy_anomaly import VacancyAnomaly
 from app.models.audit import AuditLog
 from app.models.user import User
 from app.models.selection_ai_snapshot import SelectionAISnapshot
+from app.models.appointment_letter import AppointmentLetter
 
 from app.modules.selection.schemas import (
     ShortlistRequest,
@@ -161,9 +162,18 @@ class SelectionService:
         if not ad:
             self._raise_error(404, "ADVERTISEMENT_NOT_FOUND", "Advertisement not found")
             
-        completed = (await db.execute(select(SelectionResult).where(SelectionResult.advertisement_id == req.advertisement_id))).scalars().first()
-        if completed:
-             self._raise_error(400, "SELECTION_COMPLETED", "Marks cannot be entered for completed selection")
+        # Allow entering marks unless THIS specific candidate is already confirmed
+        candidate_confirmed = (await db.execute(
+            select(SelectionResult)
+            .where(and_(
+                SelectionResult.advertisement_id == req.advertisement_id,
+                SelectionResult.candidate_id == req.candidate_id,
+                SelectionResult.status == FinalResultStatus.CONFIRMED.value
+            ))
+        )).scalars().first()
+        
+        if candidate_confirmed:
+             self._raise_error(400, "SELECTION_COMPLETED", "Marks cannot be entered for a candidate whose selection is already confirmed")
 
         sc = (await db.execute(select(ShortlistedCandidate).where(
             and_(ShortlistedCandidate.advertisement_id == req.advertisement_id, ShortlistedCandidate.application_id == req.application_id)
@@ -238,6 +248,21 @@ class SelectionService:
         if not all_scs:
             self._raise_error(400, "NO_CANDIDATES", "No candidates shortlisted for this round")
 
+        # Check if any letters have been issued. If so, block re-ranking to preserve integrity.
+        letters_count = (await db.execute(
+            select(func.count(AppointmentLetter.id))
+            .where(AppointmentLetter.selection_result_id.in_(
+                select(SelectionResult.id).where(SelectionResult.advertisement_id == advertisement_id)
+            ))
+        )).scalar_one()
+        
+        if letters_count > 0:
+            self._raise_error(
+                400, 
+                "RANKING_LOCKED", 
+                "Cannot re-generate rankings because appointment letters have already been issued. Please cancel issued letters first if you need to re-rank."
+            )
+
         ranking_inputs = []
         for sc in all_scs:
             marks = (await db.execute(select(InterviewMarks).where(and_(InterviewMarks.advertisement_id == advertisement_id, InterviewMarks.application_id == sc.application_id)))).scalars().first()
@@ -255,16 +280,17 @@ class SelectionService:
                 
             pub_count = (await db.execute(select(ApplicationDocument).where(and_(ApplicationDocument.application_id == sc.application_id, ApplicationDocument.document_type == "PUBLICATION_PROOF")))).scalars().all()
 
-            ranking_inputs.append(CandidateRankingInput(
-                application_id=sc.application_id,
-                candidate_id=sc.candidate_id,
-                full_name=cand.full_name,
-                category=cand.category,
-                highest_degree=qual.degree if qual else "N/A",
-                teaching_experience_years=total_exp,
-                interview_total=float(marks.interview_total),
-                publication_count=len(pub_count)
-            ))
+            ranking_inputs.append({
+                "application_id": str(sc.application_id),
+                "candidate_id": str(sc.candidate_id),
+                "full_name": cand.full_name,
+                "category": cand.category,
+                "highest_degree": qual.degree if qual else "N/A",
+                "marks_percentage": float(qual.percentage) if qual and qual.percentage else 0.0,
+                "teaching_experience_years": float(total_exp),
+                "interview_total": float(marks.interview_total),
+                "publication_count": len(pub_count)
+            })
 
         if not ranking_inputs:
             self._raise_error(400, "NO_CANDIDATES_WITH_MARKS", "No candidates have interview marks entered")
@@ -276,14 +302,17 @@ class SelectionService:
         if ad.assessment and ad.assessment.confirmed_vacancy:
             vacancy_count = ad.assessment.confirmed_vacancy
 
-        weight_config, priority = await self.weight_service.resolve_weights(
-            db, 
-            ad.course_id, 
-            Course_obj.level if Course_obj else "UG", 
-            advertisement_id
-        )
-
-        ranked_candidates = compute_candidate_rankings(advertisement_id, ranking_inputs, vacancy_count, weight_config)
+        # Fetch rankings from LLM
+        payload = {
+            "vacancy_count": vacancy_count,
+            "candidates": ranking_inputs
+        }
+        
+        llm_response = await self.ai_service.generate_ai_rankings(payload)
+        ranked_candidates = llm_response.get("rankings", [])
+        
+        if not ranked_candidates:
+            self._raise_error(500, "AI_GENERATION_FAILED", "AI failed to generate candidate rankings.")
 
         await db.execute(delete(CandidateScore).where(CandidateScore.advertisement_id == advertisement_id))
         await db.execute(delete(SelectionResult).where(SelectionResult.advertisement_id == advertisement_id))
@@ -292,53 +321,40 @@ class SelectionService:
         for rc in ranked_candidates:
             db.add(CandidateScore(
                 advertisement_id=advertisement_id,
-                application_id=rc.application_id,
-                candidate_id=rc.candidate_id,
+                application_id=UUID(rc["application_id"]),
+                candidate_id=UUID(rc["candidate_id"]),
                 institution_id=ad.institution_id,
-                qualification_score=rc.score_breakdown["qualification"]["weighted"],
-                experience_score=rc.score_breakdown["experience"]["weighted"],
-                interview_score=rc.score_breakdown["interview"]["weighted"],
-                publication_score=rc.score_breakdown["publication"]["weighted"],
-                reservation_tiebreaker=rc.score_breakdown["reservation"]["weighted"],
-                final_score=rc.final_score,
-                rank=rc.rank,
-                score_breakdown=rc.score_breakdown
+                qualification_score=0,
+                experience_score=0,
+                interview_score=0,
+                publication_score=0,
+                reservation_tiebreaker=0,
+                final_score=Decimal(str(rc["final_score"])),
+                rank=rc["rank"],
+                score_breakdown={"reason": rc.get("reason", "")}
             ))
             db.add(SelectionResult(
                 advertisement_id=advertisement_id,
-                application_id=rc.application_id,
-                candidate_id=rc.candidate_id,
+                application_id=UUID(rc["application_id"]),
+                candidate_id=UUID(rc["candidate_id"]),
                 institution_id=ad.institution_id,
                 course_id=ad.course_id,
                 academic_year=ad.academic_year,
-                rank=rc.rank,
-                final_score=rc.final_score,
-                result_status=rc.result_status,
-                waitlist_position=rc.waitlist_position,
+                rank=rc["rank"],
+                final_score=Decimal(str(rc["final_score"])),
+                result_status=rc["result_status"],
+                waitlist_position=rc.get("waitlist_position"),
                 status=FinalResultStatus.DRAFT.value
-            ))
-
-        for anom in ranked_candidates[0].anomalies:
-            db.add(VacancyAnomaly(
-                advertisement_id=advertisement_id,
-                institution_id=ad.institution_id,
-                anomaly_type=anom["type"],
-                severity=anom["severity"],
-                description=anom["message"]
             ))
 
         await db.execute(update(InterviewMarks).where(InterviewMarks.advertisement_id == advertisement_id).values(is_locked=True))
         
+        # We don't have deterministic weights anymore for the analysis since we used an LLM
+        # But we still run the AI selection analysis for dashboard insights
         ai_analysis = await self.ai_service.evaluate_ranking_quality(
-            ranked_rows=[rc.model_dump(mode="python") for rc in ranked_candidates],
-            candidate_inputs=[ci.model_dump(mode="python") for ci in ranking_inputs],
-            scoring_weights={
-                "qualification_weight": float(weight_config.qualification_weight),
-                "experience_weight": float(weight_config.experience_weight),
-                "interview_weight": float(weight_config.interview_weight),
-                "publication_weight": float(weight_config.publication_weight),
-                "reservation_weight": float(weight_config.reservation_weight),
-            },
+            ranked_rows=ranked_candidates,
+            candidate_inputs=ranking_inputs,
+            scoring_weights={},
         )
 
         await self._write_audit(db, "Advertisement", advertisement_id, "GENERATE_RANKING", current_user.id)
@@ -576,3 +592,38 @@ class SelectionService:
         await db.refresh(snapshot)
         
         return {"status": "success", "snapshot_id": snapshot.id}
+
+    async def get_selection_results(self, db: AsyncSession, institution_id: int | None, status: str | None, result_status: str | None) -> List[dict]:
+        filters = []
+        if institution_id:
+            filters.append(SelectionResult.institution_id == institution_id)
+        if status:
+            filters.append(SelectionResult.status == status)
+        if result_status:
+            filters.append(SelectionResult.result_status == result_status)
+            
+        from app.models.institution import Course
+        stmt = (
+            select(SelectionResult, Candidate.full_name, Application.application_number, Course.name.label("course_name"))
+            .join(Candidate, Candidate.id == SelectionResult.candidate_id)
+            .join(Application, Application.id == SelectionResult.application_id)
+            .join(Course, Course.id == SelectionResult.course_id)
+            .where(and_(*filters))
+            .order_by(SelectionResult.created_at.desc())
+        )
+        rows = (await db.execute(stmt)).all()
+        
+        return [
+            {
+                "id": sr.id,
+                "candidate_name": name,
+                "course_name": cname,
+                "application_number": app_num,
+                "final_score": float(sr.final_score),
+                "rank": sr.rank,
+                "result_status": sr.result_status,
+                "status": sr.status,
+                "created_at": sr.created_at
+            }
+            for sr, name, app_num, cname in rows
+        ]

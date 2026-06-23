@@ -5,14 +5,15 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.security import (
-    verify_password, create_access_token, get_password_hash, get_current_user,
+    verify_password, create_access_token, create_refresh_token, get_password_hash, get_current_user,
     create_password_reset_token, verify_password_reset_token, RoleChecker
 )
 from app.core.config import settings
-from app.schemas.user import Token, UserResponse, PasswordResetRequest, PasswordResetConfirm, CandidateRegister, UserUpdate, UserAdminCreate
+from app.schemas.user import Token, UserResponse, PasswordResetRequest, PasswordResetConfirm, CandidateRegister, UserUpdate, UserAdminCreate, RefreshTokenRequest
 from app.schemas.pagination import PaginatedResponse
 from app.dependencies.pagination import PaginationParams, paginate
 from app.models.user import User, RoleEnum
+from jose import jwt
 
 from sqlalchemy import select
 from app.services.notification_service import send_password_reset_email
@@ -35,11 +36,44 @@ async def login_for_access_token(db: Session = Depends(get_db), form_data: OAuth
     access_token = create_access_token(
         subject=user.id, expires_delta=access_token_expires
     )
+    refresh_token = create_refresh_token(subject=user.id)
     return {
         "access_token": access_token,
+        "refresh_token": refresh_token,
         "token_type": "bearer",
         "user": user,
     }
+
+@router.post("/refresh")
+async def refresh_access_token(request: RefreshTokenRequest, db: Session = Depends(get_db)):
+    """
+    Refresh the access token using a valid refresh token.
+    """
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(request.refresh_token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+        if payload.get("scope") != "refresh":
+            raise credentials_exception
+    except jwt.JWTError:
+        raise credentials_exception
+        
+    result = await db.execute(select(User).filter(User.id == int(user_id)))
+    user = result.scalars().first()
+    if user is None or (hasattr(user, "is_active") and not user.is_active):
+        raise credentials_exception
+        
+    access_token_expires = timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        subject=user.id, expires_delta=access_token_expires
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
 
 @router.post("/register", response_model=UserResponse, dependencies=[Depends(admin_only)])
 async def register_user(

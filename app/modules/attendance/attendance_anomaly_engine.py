@@ -81,7 +81,7 @@ def run_attendance_anomaly_check(
             slot
             for slot in timetable_slots
             if slot.is_active
-            and slot.day_of_week == lecture_log.day_of_week
+            and slot.calendar_date == lecture_log.lecture_date
             and slot.slot_number == lecture_log.slot_number
         ),
         None,
@@ -93,7 +93,7 @@ def run_attendance_anomaly_check(
                 severity="MEDIUM",
                 description=(
                     f"Logged subject '{lecture_log.subject_name}' differs from timetable "
-                    f"'{expected_slot.subject_name}' for slot {lecture_log.slot_number} on {lecture_log.day_of_week}."
+                    f"'{expected_slot.subject_name}' for slot {lecture_log.slot_number} on {lecture_log.lecture_date}."
                 ),
             )
         )
@@ -161,7 +161,7 @@ def run_attendance_anomaly_check(
 
     if lecture_log.lecture_date < lecture_log.created_at.date():
         scheduled_slots = [
-            slot for slot in timetable_slots if slot.is_active and slot.day_of_week == lecture_log.day_of_week
+            slot for slot in timetable_slots if slot.is_active and slot.calendar_date == lecture_log.lecture_date
         ]
         if scheduled_slots and len(same_day_logs) == 0:
             anomalies.append(

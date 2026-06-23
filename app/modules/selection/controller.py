@@ -65,3 +65,7 @@ class SelectionController:
     async def create_ai_snapshot(self, db: AsyncSession, current_user: User, advertisement_id: UUID):
         result = await self.service.create_ai_snapshot(db, current_user, advertisement_id)
         return result
+
+    async def get_all_results(self, db: AsyncSession, institution_id: int | None, status: str | None, result_status: str | None):
+        items = await self.service.get_selection_results(db, institution_id, status, result_status)
+        return {"status": "success", "items": items}

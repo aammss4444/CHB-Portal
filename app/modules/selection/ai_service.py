@@ -7,6 +7,12 @@ class SelectionAIService:
     def __init__(self, engine: SelectionAIEngine):
         self.engine = engine
 
+    async def generate_ai_rankings(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Generate candidate rankings using LLM.
+        """
+        return await self.engine.generate_ai_rankings(payload)
+
     async def analyze_selection(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Orchestrates the AI analysis of candidate rankings.

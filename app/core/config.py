@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     MAX_DAILY_LECTURES: int = 6
     MAX_DAILY_LECTURES_POLICY: int = 6
     MIN_JOINING_DAYS: int = 0  # Set to 7 for production

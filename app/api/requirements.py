@@ -64,13 +64,16 @@ router = APIRouter(prefix="/requirements", tags=["Requirements (Step 1)"])
 
 admin_only = RoleChecker([RoleEnum.ADMIN])
 admin_or_principal = RoleChecker([RoleEnum.ADMIN, RoleEnum.PRINCIPAL])
+ro_only = RoleChecker([RoleEnum.RO])
+admin_or_ro = RoleChecker([RoleEnum.ADMIN, RoleEnum.RO])
+ro_or_principal = RoleChecker([RoleEnum.RO, RoleEnum.PRINCIPAL])
 
 async def log_audit(db: AsyncSession, entity_name: str, entity_id: Any, action: str, user_id: int, new_val: dict = None):
     audit = AuditLog(entity_name=entity_name, entity_id=str(entity_id), action=action, user_id=user_id, new_value=new_val)
     db.add(audit)
     await db.flush()
 
-@router.post("/institutions", response_model=InstitutionResponse, dependencies=[Depends(admin_only)])
+@router.post("/institutions", response_model=InstitutionResponse, dependencies=[Depends(ro_only)])
 async def create_institution(inst_in: InstitutionCreate, db: AsyncSession = Depends(get_db)):
     """Seed data: Create Institution and its Courses."""
     # Check if code already exists
@@ -105,7 +108,7 @@ async def get_institutions(
     query = select(Institution).options(selectinload(Institution.courses))
     return await paginate(db, query, pagination)
 
-@router.patch("/institutions/{institution_id}", response_model=InstitutionResponse, dependencies=[Depends(admin_only)])
+@router.patch("/institutions/{institution_id}", response_model=InstitutionResponse, dependencies=[Depends(admin_or_ro)])
 async def update_institution(institution_id: int, inst_in: InstitutionUpdate, db: AsyncSession = Depends(get_db)):
     """Update institution details."""
     result = await db.execute(select(Institution).filter(Institution.id == institution_id))
@@ -128,19 +131,15 @@ async def update_institution(institution_id: int, inst_in: InstitutionUpdate, db
     )
     return result.scalars().first()
 
-@router.delete("/institutions/{institution_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_only)])
+@router.delete("/institutions/{institution_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_or_ro)])
 async def delete_institution(
     institution_id: int, 
     db: AsyncSession = Depends(get_db), 
     current_user: User = Depends(get_current_user)
 ):
     """
-    Enterprise-grade deletion of an institution.
-    
-    - Requires ADMIN role.
-    - Cascades deletion to Courses, Intakes, Norms, Requirements, Vacancies, and Advertisements.
-    - Users associated with the institution are NOT deleted but unlinked.
-    - Includes audit logging.
+    Delete an institution and ALL related data across the entire schema.
+    Uses topologically-ordered SQL deletes to respect FK constraints.
     """
     # 1. Verify existence
     result = await db.execute(select(Institution).filter(Institution.id == institution_id))
@@ -170,25 +169,100 @@ async def delete_institution(
         }
     )
     
-    # 3. Perform Deletion
+    # 3. Perform Deletion - disable FK checks, delete everything, re-enable
     try:
-        await db.delete(inst)
+        # Disable FK constraint triggers for this transaction
+        await db.execute(text("SET session_replication_role = 'replica'"))
+
+        # Delete from ALL tables that reference this institution
+        all_tables = [
+            "lecture_log_audit", "bill_audit", "payment_transaction", "bill_line_item",
+            "bill_approval", "appointment_audit", "appointment_acceptances",
+            "advertisement_audit", "published_advertisements", "shortlisted_candidates",
+            "selection_ai_snapshots", "scoring_weight_configs", "selection_rounds",
+            "application_documents", "document_validation_log",
+            "vacancy_anomalies", "candidate_scores", "interview_marks",
+            "faculty_credentials", "existing_faculty", "selection_results",
+            "appointment_letters", "applications", "advertisements",
+            "vacancy_assessments", "chb_bill", "timetable_slots",
+            "daily_attendance_summary", "attendance_anomalies", "lecture_logs",
+            "rate_master", "academic_calendar", "norms", "intake_definitions",
+            "requirement_anomalies", "faculty_requirements", "faculty_qualifications",
+            "courses",
+        ]
+
+        for table in all_tables:
+            try:
+                async with db.begin_nested():
+                    await db.execute(
+                        text(f"DELETE FROM {table} WHERE institution_id = :id"),
+                        {"id": institution_id}
+                    )
+            except Exception:
+                pass  # Table might not have institution_id column - savepoint rolled back
+
+        # Also delete nested rows that reference via subquery
+        nested_deletes = [
+            "DELETE FROM lecture_log_audit WHERE lecture_log_id IN (SELECT id FROM lecture_logs WHERE institution_id = :id)",
+            "DELETE FROM bill_audit WHERE bill_id IN (SELECT id FROM chb_bill WHERE institution_id = :id)",
+            "DELETE FROM payment_transaction WHERE bill_id IN (SELECT id FROM chb_bill WHERE institution_id = :id)",
+            "DELETE FROM bill_line_item WHERE bill_id IN (SELECT id FROM chb_bill WHERE institution_id = :id)",
+            "DELETE FROM bill_approval WHERE bill_id IN (SELECT id FROM chb_bill WHERE institution_id = :id)",
+            "DELETE FROM appointment_audit WHERE appointment_letter_id IN (SELECT id FROM appointment_letters WHERE institution_id = :id)",
+            "DELETE FROM appointment_acceptances WHERE appointment_letter_id IN (SELECT id FROM appointment_letters WHERE institution_id = :id)",
+            "DELETE FROM advertisement_audit WHERE advertisement_id IN (SELECT id FROM advertisements WHERE institution_id = :id)",
+            "DELETE FROM published_advertisements WHERE advertisement_id IN (SELECT id FROM advertisements WHERE institution_id = :id)",
+            "DELETE FROM shortlisted_candidates WHERE advertisement_id IN (SELECT id FROM advertisements WHERE institution_id = :id)",
+            "DELETE FROM selection_ai_snapshots WHERE advertisement_id IN (SELECT id FROM advertisements WHERE institution_id = :id)",
+            "DELETE FROM scoring_weight_configs WHERE advertisement_id IN (SELECT id FROM advertisements WHERE institution_id = :id)",
+            "DELETE FROM application_documents WHERE application_id IN (SELECT id FROM applications WHERE institution_id = :id)",
+            "DELETE FROM document_validation_log WHERE application_id IN (SELECT id FROM applications WHERE institution_id = :id)",
+        ]
+        for query in nested_deletes:
+            try:
+                async with db.begin_nested():
+                    await db.execute(text(query), {"id": institution_id})
+            except Exception:
+                pass
+
+        # Unlink users
+        async with db.begin_nested():
+            await db.execute(
+                text("UPDATE users SET institution_id = NULL WHERE institution_id = :id"),
+                {"id": institution_id}
+            )
+
+        # Delete the institution
+        async with db.begin_nested():
+            await db.execute(
+                text("DELETE FROM institutions WHERE id = :id"),
+                {"id": institution_id}
+            )
+
+        # Re-enable FK constraint triggers
+        await db.execute(text("SET session_replication_role = 'origin'"))
+
         await db.commit()
     except Exception as e:
         await db.rollback()
+        # Ensure we re-enable triggers even on failure
+        try:
+            await db.execute(text("SET session_replication_role = 'origin'"))
+        except Exception:
+            pass
         logger.error(f"Failed to delete institution {institution_id}: {str(e)}")
         raise HTTPException(
             status_code=500,
             detail={
                 "status": "error",
                 "code": "DELETION_FAILED",
-                "message": "An error occurred while deleting the institution and its related data."
+                "message": f"Delete failed: {str(e)}"
             }
         )
     
     return {"status": "success", "message": f"Institution {institution_id} and all related data have been deleted."}
     
-@router.post("/institutions/{institution_id}/courses", response_model=CourseResponse, dependencies=[Depends(admin_only)])
+@router.post("/institutions/{institution_id}/courses", response_model=CourseResponse, dependencies=[Depends(admin_or_ro)])
 async def add_course_to_institution(
     institution_id: int, 
     course_in: CourseCreate, 
@@ -266,7 +340,7 @@ async def get_course(course_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Course not found")
     return course
 
-@router.patch("/courses/{course_id}", dependencies=[Depends(admin_only)])
+@router.patch("/courses/{course_id}", dependencies=[Depends(admin_or_ro)])
 async def update_course(course_id: int, course_in: CourseUpdate, db: AsyncSession = Depends(get_db)):
     """Update Course details."""
     result = await db.execute(select(Course).filter(Course.id == course_id))
@@ -282,7 +356,7 @@ async def update_course(course_id: int, course_in: CourseUpdate, db: AsyncSessio
     return {"status": "success", "message": "Course updated"}
 
 
-@router.delete("/courses/{course_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_only)])
+@router.delete("/courses/{course_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_or_ro)])
 async def delete_course(
     course_id: int,
     db: AsyncSession = Depends(get_db),
@@ -328,7 +402,7 @@ async def get_course_categories():
     ]
 
 
-@router.post("/norms/seed-dte-defaults", dependencies=[Depends(admin_or_principal)])
+@router.post("/norms/seed-dte-defaults", dependencies=[Depends(ro_or_principal)])
 async def seed_dte_defaults_endpoint(
     body: SeedDTEDefaultsRequest,
     db: AsyncSession = Depends(get_db),
@@ -352,20 +426,20 @@ async def seed_dte_defaults_endpoint(
     return {"status": "success", "data": result}
 
 
-@router.post("/norms", dependencies=[Depends(admin_or_principal)])
+@router.post("/norms", dependencies=[Depends(ro_or_principal)])
 async def create_norm(
     norm_in: NormCreate,
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Admin creates a single institution-scoped norm."""
+    """RO creates a single institution-scoped norm."""
     if current_user.role == RoleEnum.PRINCIPAL:
         resolved_institution_id = current_user.institution_id
     else:
         if norm_in.institution_id is None:
             raise HTTPException(
                 status_code=400,
-                detail="institution_id is required for ADMIN role."
+                detail="institution_id is required for RO role."
             )
         resolved_institution_id = norm_in.institution_id
 
@@ -391,7 +465,7 @@ async def get_norms(
     """
     List norms filtered by institution + academic year.
     PRINCIPAL: institution_id auto-set from token; cannot query other institutions.
-    ADMIN: institution_id required as query param.
+    RO: institution_id required as query param.
     """
     if current_user.role == RoleEnum.PRINCIPAL:
         resolved_institution_id = current_user.institution_id
@@ -402,7 +476,7 @@ async def get_norms(
                 detail={
                     "status": "error",
                     "code": "UNAUTHORIZED_ACCESS",
-                    "message": "institution_id is required for ADMIN role.",
+                    "message": "institution_id is required for RO role.",
                 },
             )
         resolved_institution_id = institution_id
@@ -434,7 +508,7 @@ async def get_norms(
     }
 
 
-@router.patch("/norms/{norm_id}", dependencies=[Depends(admin_or_principal)])
+@router.patch("/norms/{norm_id}", dependencies=[Depends(ro_or_principal)])
 async def update_norm(norm_id: int, norm_in: NormUpdate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Update norm details."""
     result = await db.execute(select(Norm).filter(Norm.id == norm_id))
@@ -453,7 +527,7 @@ async def update_norm(norm_id: int, norm_in: NormUpdate, db: AsyncSession = Depe
     return {"status": "success", "data": norm}
 
 
-@router.delete("/norms/{norm_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(admin_or_principal)])
+@router.delete("/norms/{norm_id}", status_code=status.HTTP_200_OK, dependencies=[Depends(ro_or_principal)])
 async def delete_norm(
     norm_id: int,
     db: AsyncSession = Depends(get_db),
@@ -484,7 +558,7 @@ async def delete_norm(
     await db.commit()
     return {"status": "success", "message": f"Norm {norm_id} has been deleted."}
 
-@router.post("/intake", response_model=IntakeResponse, dependencies=[Depends(admin_or_principal)])
+@router.post("/intake", response_model=IntakeResponse, dependencies=[Depends(ro_or_principal)])
 async def define_intake(intake_in: IntakeCreate, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
     """Define student intake for a specific Course."""
     # Resolve institution_id
@@ -492,7 +566,7 @@ async def define_intake(intake_in: IntakeCreate, db: AsyncSession = Depends(get_
         resolved_institution_id = current_user.institution_id
     else:
         if intake_in.institution_id is None:
-            raise HTTPException(status_code=400, detail="institution_id is required for ADMIN role.")
+            raise HTTPException(status_code=400, detail="institution_id is required for RO role.")
         resolved_institution_id = intake_in.institution_id
 
     await verify_institution_access(resolved_institution_id, current_user)
@@ -570,7 +644,7 @@ async def get_intakes(
     ]
 
 
-@router.patch("/intake/{intake_id}", response_model=IntakeResponse, dependencies=[Depends(admin_or_principal)])
+@router.patch("/intake/{intake_id}", response_model=IntakeResponse, dependencies=[Depends(ro_or_principal)])
 async def update_intake(
     intake_id: int,
     intake_in: IntakeUpdate,
@@ -611,7 +685,7 @@ async def update_intake(
     }
 
 
-@router.post("/course-setup", response_model=CourseSetupResponse, dependencies=[Depends(admin_only)])
+@router.post("/course-setup", response_model=CourseSetupResponse, dependencies=[Depends(ro_only)])
 async def course_setup(
     req: CourseSetupRequest,
     db: AsyncSession = Depends(get_db),

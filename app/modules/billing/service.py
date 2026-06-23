@@ -658,7 +658,7 @@ class BillingService:
             audit_action = BillAuditAction.APPROVED
         elif approver_role == RoleEnum.RO:
             bill.bill_status = BillStatus.RO_APPROVED.value
-            bill.current_approver_role = BillApproverRole.DIRECTORATE.value
+            bill.current_approver_role = BillApproverRole.TREASURY.value
             audit_action = BillAuditAction.APPROVED
         elif approver_role == RoleEnum.DIRECTORATE:
             bill.bill_status = BillStatus.DIRECTORATE_APPROVED.value
@@ -1088,7 +1088,11 @@ class BillingService:
         limit: int = 10,
     ) -> tuple[list[dict[str, Any]], int]:
         """List bills with role-scoped filters and queue-scoped views for approval roles."""
-        stmt = select(CHBBill)
+        stmt = select(CHBBill, User.full_name.label("faculty_name")).outerjoin(
+            FacultyCredentials, CHBBill.faculty_credential_id == FacultyCredentials.id
+        ).outerjoin(
+            User, FacultyCredentials.user_id == User.id
+        )
         filters = []
 
         if faculty_credential_id:
@@ -1130,41 +1134,44 @@ class BillingService:
         if limit > 0:
             stmt = stmt.offset(skip).limit(limit)
 
-        rows = (await db.execute(stmt)).scalars().all()
+        rows = (await db.execute(stmt)).all()
         result_list = [
             {
-                "id": row.id,
-                "bill_number": row.bill_number,
-                "faculty_credential_id": row.faculty_credential_id,
-                "institution_id": row.institution_id,
-                "course_id": row.course_id,
-                "academic_year": row.academic_year,
-                "period_start": row.period_start,
-                "period_end": row.period_end,
-                "designation": row.designation,
-                "total_theory_lectures": row.total_theory_lectures,
-                "total_lab_lectures": row.total_lab_lectures,
-                "total_tutorial_lectures": row.total_tutorial_lectures,
-                "total_extra_lectures": row.total_extra_lectures,
-                "total_substitute_lectures": row.total_substitute_lectures,
-                "total_billable_lectures": row.total_billable_lectures,
-                "gross_amount": row.gross_amount,
-                "deductions": row.deductions,
-                "net_amount": row.net_amount,
-                "bill_status": self._enum_value(row.bill_status),
-                "current_approver_role": self._enum_value(row.current_approver_role) if row.current_approver_role else None,
-                "rejection_stage": row.rejection_stage,
-                "rejection_reason": row.rejection_reason,
-                "generated_by": row.generated_by,
-                "generated_at": row.generated_at,
-                "submitted_at": row.submitted_at,
-                "treasury_processed_at": row.treasury_processed_at,
-                "is_locked": row.is_locked,
-                "created_at": row.created_at,
-                "updated_at": row.updated_at,
+                "id": row.CHBBill.id,
+                "bill_number": row.CHBBill.bill_number,
+                "faculty_credential_id": row.CHBBill.faculty_credential_id,
+                "faculty_name": row.faculty_name,
+                "institution_id": row.CHBBill.institution_id,
+                "course_id": row.CHBBill.course_id,
+                "academic_year": row.CHBBill.academic_year,
+                "period_start": row.CHBBill.period_start,
+                "period_end": row.CHBBill.period_end,
+                "designation": row.CHBBill.designation,
+                "total_theory_lectures": row.CHBBill.total_theory_lectures,
+                "total_lab_lectures": row.CHBBill.total_lab_lectures,
+                "total_tutorial_lectures": row.CHBBill.total_tutorial_lectures,
+                "total_extra_lectures": row.CHBBill.total_extra_lectures,
+                "total_substitute_lectures": row.CHBBill.total_substitute_lectures,
+                "total_billable_lectures": row.CHBBill.total_billable_lectures,
+                "gross_amount": row.CHBBill.gross_amount,
+                "deductions": row.CHBBill.deductions,
+                "net_amount": row.CHBBill.net_amount,
+                "total_amount": row.CHBBill.net_amount,
+                "bill_status": self._enum_value(row.CHBBill.bill_status),
+                "current_approver_role": self._enum_value(row.CHBBill.current_approver_role) if row.CHBBill.current_approver_role else None,
+                "rejection_stage": row.CHBBill.rejection_stage,
+                "rejection_reason": row.CHBBill.rejection_reason,
+                "generated_by": row.CHBBill.generated_by,
+                "generated_at": row.CHBBill.generated_at,
+                "submitted_at": row.CHBBill.submitted_at,
+                "treasury_processed_at": row.CHBBill.treasury_processed_at,
+                "is_locked": row.CHBBill.is_locked,
+                "created_at": row.CHBBill.created_at,
+                "updated_at": row.CHBBill.updated_at,
             }
             for row in rows
         ]
+        return result_list, total
         return result_list, total
 
     async def get_bill_detail(self, db: AsyncSession, current_user: User, bill_id: UUID) -> dict[str, Any]:
@@ -1188,10 +1195,13 @@ class BillingService:
         target_institution_id = institution_id
         if current_user.role == RoleEnum.PRINCIPAL:
             target_institution_id = current_user.institution_id
-        if target_institution_id is None:
+
+        filters = []
+        if target_institution_id is not None:
+            filters.append(CHBBill.institution_id == target_institution_id)
+        elif current_user.role not in {RoleEnum.ADMIN, RoleEnum.RO, RoleEnum.DIRECTORATE, RoleEnum.TREASURY}:
             self._raise_error(400, "HTTP_ERROR", "institution_id is required")
 
-        filters = [CHBBill.institution_id == target_institution_id]
         if academic_year:
             filters.append(CHBBill.academic_year == academic_year)
         if month:
@@ -1215,6 +1225,16 @@ class BillingService:
         ).first()
         total_gross_amount = Decimal(totals[0] or 0)
         total_net_amount = Decimal(totals[1] or 0)
+        
+        approved_totals = (
+            await db.execute(
+                select(func.coalesce(func.sum(CHBBill.net_amount), 0)).where(
+                    *filters, 
+                    CHBBill.bill_status == BillStatus.TREASURY_PROCESSED.value
+                )
+            )
+        ).scalar_one()
+        total_approved_amount = Decimal(approved_totals or 0)
 
         bills_pending_principal = int(
             (
@@ -1248,17 +1268,21 @@ class BillingService:
             ).scalar_one()
             or 0
         )
-        bills_rejected = int(
+        
+        draft_count = int(
             (
-                await db.execute(select(func.count(CHBBill.id)).where(*filters, CHBBill.bill_status == BillStatus.REJECTED.value))
+                await db.execute(select(func.count(CHBBill.id)).where(*filters, CHBBill.bill_status == 'DRAFT'))
             ).scalar_one()
+            or 0
+        )
+
+        bills_rejected = int(
+            (await db.execute(select(func.count(CHBBill.id)).where(*filters, CHBBill.bill_status == BillStatus.REJECTED.value))).scalar_one()
             or 0
         )
         bills_processed = int(
             (
-                await db.execute(
-                    select(func.count(CHBBill.id)).where(*filters, CHBBill.bill_status == BillStatus.TREASURY_PROCESSED.value)
-                )
+                await db.execute(select(func.count(CHBBill.id)).where(*filters, CHBBill.bill_status == BillStatus.TREASURY_PROCESSED.value))
             ).scalar_one()
             or 0
         )
@@ -1267,6 +1291,8 @@ class BillingService:
             "total_bills_generated": total_bills_generated,
             "total_gross_amount": total_gross_amount,
             "total_net_amount": total_net_amount,
+            "total_approved_amount": total_approved_amount,
+            "draft_count": draft_count,
             "bills_pending_principal": bills_pending_principal,
             "bills_pending_ro": bills_pending_ro,
             "bills_pending_directorate": bills_pending_directorate,

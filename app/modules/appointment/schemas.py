@@ -94,6 +94,7 @@ class AppointmentListItem(BaseModel):
     course: str
     joining_date: date
     credentials_issued: bool
+    faculty_credential_id: Optional[UUID] = None
 
 
 class AppointmentListResponse(BaseModel):

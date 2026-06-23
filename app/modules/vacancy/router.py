@@ -49,14 +49,14 @@ async def update_faculty(
 @router.get("/faculty", dependencies=[Depends(admin_or_principal)])
 async def get_faculty_list(
     institution_id: str, 
-    course_id: str, 
-    academic_year: str, 
+    course_id: Optional[str] = None, 
+    academic_year: Optional[str] = None, 
     pagination: PaginationParams = Depends(),
     db: AsyncSession = Depends(get_db), 
     current_user: User = Depends(get_current_user)
 ):
     inst_id = _parse_int_like(institution_id, "institution_id")
-    course_id_int = _parse_int_like(course_id, "course_id")
+    course_id_int = _parse_int_like(course_id, "course_id") if course_id else None
     await verify_institution_access(inst_id, current_user)
     return await controller.get_faculty_list(db, current_user, inst_id, course_id_int, academic_year, pagination.skip, pagination.limit)
 

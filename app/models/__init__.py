@@ -24,7 +24,7 @@ from app.models.appointment_letter import AppointmentLetter, AppointmentLetterSt
 from app.models.appointment_acceptance import AppointmentAcceptance
 from app.models.faculty_credentials import FacultyCredentials
 from app.models.appointment_audit import AppointmentAudit, AppointmentAuditAction
-from app.models.timetable_slot import TimetableSlot, WeekDayEnum, TimetableLectureType
+from app.models.timetable_slot import TimetableSlot, TimetableLectureType
 from app.models.lecture_log import LectureLog, LectureLogStatus, LectureLogType
 from app.models.daily_attendance_summary import DailyAttendanceSummary
 from app.models.attendance_anomaly import AttendanceAnomaly, AnomalySeverity

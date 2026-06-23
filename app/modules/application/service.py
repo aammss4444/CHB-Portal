@@ -439,14 +439,17 @@ class ApplicationService:
         return application
 
     async def list_my_applications(self, db: AsyncSession, current_user: User, skip: int = 0, limit: int = 10) -> tuple[list[dict[str, Any]], int]:
-        candidate = await self._get_candidate_or_404(db, current_user.id)
-        
+        candidate = await self._get_candidate_by_user(db, current_user.id)
+        if not candidate:
+            return [], 0
+
         stmt = (
             select(
                 Application.id.label("application_id"),
                 Application.application_number,
                 Application.status,
                 Application.academic_year,
+                Application.advertisement_id,
                 Institution.name.label("institution_name"),
                 Course.name.label("course_name"),
             )
@@ -472,6 +475,7 @@ class ApplicationService:
                 "institution_name": row["institution_name"],
                 "course_name": row["course_name"],
                 "academic_year": row["academic_year"],
+                "advertisement_id": str(row["advertisement_id"]),
                 "advertisement_name": f"CHB Advertisement {row['academic_year']} - {row['course_name']}",
             }
             for row in rows

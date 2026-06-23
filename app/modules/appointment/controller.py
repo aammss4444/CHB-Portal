@@ -6,12 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.user import User
 from app.modules.appointment.schemas import (
-    AppointmentApproveRequest,
-    AppointmentCancelRequest,
     AppointmentGenerateRequest,
     AppointmentRespondRequest,
     AppointmentUpdateRequest,
-    CredentialResponse,
 )
 from app.modules.appointment.service import AppointmentService
 
@@ -35,25 +32,9 @@ class AppointmentController:
         return {"status": "success", "data": data}
 
     async def submit(self, db: AsyncSession, current_user: User, appointment_id: UUID):
-        letter = await self.service.submit_letter(db, current_user, appointment_id)
+        # In the new workflow, submit by Principal directly issues it to Candidate
+        letter = await self.service.submit_letter_directly(db, current_user, appointment_id)
         return {"status": "success", "data": {"appointment_id": letter.id, "status": letter.status}}
-
-    async def approve(
-        self, db: AsyncSession, current_user: User, appointment_id: UUID, req: AppointmentApproveRequest
-    ):
-        letter = await self.service.approve_letter(db, current_user, appointment_id, req)
-        return {"status": "success", "data": {"appointment_id": letter.id, "status": letter.status}}
-
-    async def issue(self, db: AsyncSession, current_user: User, appointment_id: UUID):
-        letter = await self.service.issue_letter(db, current_user, appointment_id)
-        return {
-            "status": "success",
-            "data": {
-                "appointment_number": letter.appointment_number,
-                "issued_at": letter.issued_at,
-                "acceptance_deadline": letter.acceptance_deadline,
-            },
-        }
 
     async def respond(
         self,
@@ -65,17 +46,6 @@ class AppointmentController:
     ):
         letter = await self.service.respond_letter(db, current_user, appointment_id, req, ip_address)
         return {"status": "success", "data": {"appointment_id": letter.id, "status": letter.status}}
-
-    async def cancel(
-        self, db: AsyncSession, current_user: User, appointment_id: UUID, req: AppointmentCancelRequest
-    ):
-        letter = await self.service.cancel_letter(db, current_user, appointment_id, req.remarks)
-        return {"status": "success", "data": {"appointment_id": letter.id, "status": letter.status}}
-
-    async def credentials(self, db: AsyncSession, current_user: User, appointment_id: UUID):
-        creds = await self.service.trigger_credentials(db, current_user, appointment_id)
-        payload = CredentialResponse.model_validate(creds, from_attributes=True).model_dump()
-        return {"status": "success", "data": payload}
 
     async def list_institution(
         self,
@@ -91,4 +61,8 @@ class AppointmentController:
         data = await self.service.list_institution_letters(
             db, current_user, institution_id, academic_year, status, course_id, page, size
         )
+        return {"status": "success", "data": data}
+
+    async def list_candidate(self, db: AsyncSession, current_user: User):
+        data = await self.service.list_candidate_letters(db, current_user)
         return {"status": "success", "data": data}

@@ -45,7 +45,8 @@ class BillingController:
 
     async def generate_bill(self, db: AsyncSession, current_user: User, req: BillGenerateRequest):
         data = await self.service.generate_bill_endpoint(db, current_user, req)
-        ai_validation = await self.ai_service.validate_generated_bill(data)
+        payload = await self._get_ai_payload(db, current_user, data["id"])
+        ai_validation = await self.ai_service.analyze(payload)
         return {"status": "success", "data": data, "ai_validation": ai_validation}
 
     async def generate_bulk(self, db: AsyncSession, current_user: User, req: BulkBillGenerateRequest):

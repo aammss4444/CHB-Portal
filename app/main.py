@@ -1,5 +1,6 @@
 # Heartbeat: 2026-05-04 18:05
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.exceptions import ResponseValidationError
 from fastapi.responses import JSONResponse
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -19,6 +20,7 @@ from app.modules.attendance.router import router as attendance_router
 from app.modules.billing.router import router as billing_router
 from app.modules.payments.router import router as payments_router
 from app.modules.audit.router import router as audit_router
+from app.modules.principal.router import router as principal_router
 from app.modules.helpdesk.router import router as helpdesk_router
 from app.core.config import settings
 
@@ -65,6 +67,8 @@ async def lifespan(app: FastAPI):
 
 
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+import os
 
 app = FastAPI(
     title="CHB Portal Backend",
@@ -73,7 +77,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-cors_origins = [origin.strip() for origin in settings.CORS_ORIGINS.split(",") if origin.strip()]
+uploads_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
+os.makedirs(uploads_dir, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+
+cors_origins_raw = settings.CORS_ORIGINS.strip('"').strip("'")
+cors_origins = [origin.strip() for origin in cors_origins_raw.split(",") if origin.strip()]
 # We don't strip '*' here so it can be used in allow_origins if desired,
 # though allow_credentials=True will still require specific origins or regex.
 
@@ -126,10 +135,22 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         content={"status": "error", "code": code, "message": message},
     )
     origin = request.headers.get("origin")
-    if origin in cors_origins or "*" in cors_origins:
+    if origin and (origin in cors_origins or "*" in cors_origins):
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
     return response
+
+@app.exception_handler(ResponseValidationError)
+async def validation_exception_handler(request: Request, exc: ResponseValidationError):
+    import traceback
+    with open("D:/chb2/CHB/backend/scratch/response_error.log", "a") as f:
+        f.write(f"\n--- ResponseValidationError ---\n")
+        f.write(str(exc.errors()))
+        f.write("\n")
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": exc.errors()},
+    )
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
@@ -175,7 +196,11 @@ app.include_router(attendance_router, prefix="/api")
 app.include_router(billing_router, prefix="/api")
 app.include_router(payments_router, prefix="/api")
 app.include_router(audit_router, prefix="/api")
+app.include_router(principal_router, prefix="/api")
 app.include_router(helpdesk_router, prefix="/api")
+
+from app.api.dashboard import router as dashboard_router
+app.include_router(dashboard_router, prefix="/api/requirements")
 
 @app.get("/")
 async def read_root():

@@ -17,6 +17,7 @@ class FacultyCredentials(Base):
     faculty_code = Column(String(50), nullable=False, unique=True)
     portal_username = Column(String(100), nullable=False, unique=True)
     temp_password_hash = Column(String, nullable=False)
+    temp_password_plain = Column(String, nullable=True) # For dev display
     credential_issued_at = Column(DateTime(timezone=True), server_default=func.now())
     # STEP 7 GATE: faculty must have is_active = True credentials
     # before they can log attendance

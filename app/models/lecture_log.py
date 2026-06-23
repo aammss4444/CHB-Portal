@@ -9,6 +9,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Integer,
+    Float,
     String,
     Text,
     Time,
@@ -54,7 +55,6 @@ class LectureLog(Base):
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
     academic_year = Column(String(20), nullable=False)
     lecture_date = Column(Date, nullable=False)
-    day_of_week = Column(Enum("MONDAY", "TUESDAY", "WEDNESDAY", "THURSDAY", "FRIDAY", "SATURDAY", name="attendance_weekday_enum", create_type=False), nullable=False)
     slot_number = Column(Integer, nullable=False)
     start_time = Column(Time, nullable=False)
     end_time = Column(Time, nullable=False)
@@ -63,6 +63,10 @@ class LectureLog(Base):
     class_name = Column(String(100), nullable=True)
     topic_covered = Column(Text, nullable=False)
     attendance_count = Column(Integer, nullable=True)
+    ai_attendance_count = Column(Integer, nullable=True)
+    manual_attendance_count = Column(Integer, nullable=True)
+    latitude = Column(Float, nullable=True)
+    longitude = Column(Float, nullable=True)
     is_extra = Column(Boolean, nullable=False, default=False)
     is_substitute = Column(Boolean, nullable=False, default=False)
     substitute_for_faculty_id = Column(UUID(as_uuid=True), ForeignKey("faculty_credentials.id"), nullable=True)
