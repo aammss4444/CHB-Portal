@@ -1285,7 +1285,39 @@ async def faculty_requirement_calculator(
         }
         ai_result = await ai_service.validate_with_ai(ai_data, history)
 
-        # 8. Build course summary
+        # 8. Save to Database
+        req_stmt = select(FacultyRequirement).where(FacultyRequirement.intake_id == intake.id)
+        existing_req = (await db.execute(req_stmt)).scalars().first()
+        
+        formula = {
+            "calc_base": calc_base,
+            "norm_ratio": float(norm.faculty_student_ratio),
+            "required": required
+        }
+
+        if existing_req:
+            existing_req.computed_required_count = required
+            existing_req.formula_breakdown = formula
+            await db.execute(delete(RequirementAnomaly).where(RequirementAnomaly.requirement_id == existing_req.id))
+            req_obj = existing_req
+        else:
+            req_obj = FacultyRequirement(
+                intake_id=intake.id,
+                computed_required_count=required,
+                formula_breakdown=formula
+            )
+            db.add(req_obj)
+            
+        await db.flush()
+
+        for anomaly_data in ai_result.get("anomalies", []):
+            db.add(RequirementAnomaly(
+                requirement_id=req_obj.id,
+                severity=anomaly_data.get("severity", "MEDIUM"),
+                description=anomaly_data.get("description", "AI detected anomaly")
+            ))
+
+        # 9. Build course summary
         vacancy_gap = max(0, required - existing_count)
         course_summary = {
             "course_id": course.id,
@@ -1322,6 +1354,8 @@ async def faculty_requirement_calculator(
         summary_text += "\n⚠ Review required: The AI engine flagged variations in one or more courses."
     else:
         summary_text += "\n✓ All requirements are within normal parameters."
+        
+    await db.commit()
 
     return {
         "answer": summary_text,

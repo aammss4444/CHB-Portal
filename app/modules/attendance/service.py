@@ -6,7 +6,7 @@ from typing import Any, Optional
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import and_, extract, func, or_, select, tuple_
+from sqlalchemy import and_, extract, func, or_, select, tuple_, case
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -195,8 +195,7 @@ class AttendanceService:
                 select(TimetableSlot).where(
                     TimetableSlot.faculty_credential_id == faculty_credential_id,
                     TimetableSlot.academic_year == academic_year,
-                    TimetableSlot.academic_year == academic_year,
-                    TimetableSlot.calendar_date == lecture_date,
+                    TimetableSlot.slot_date == lecture_date,
                     TimetableSlot.slot_number == slot_number,
                     TimetableSlot.is_active.is_(True),
                 )
@@ -216,8 +215,7 @@ class AttendanceService:
                     select(func.count(TimetableSlot.id)).where(
                         TimetableSlot.faculty_credential_id == faculty_credential_id,
                         TimetableSlot.academic_year == academic_year,
-                        TimetableSlot.academic_year == academic_year,
-                        TimetableSlot.calendar_date == attendance_date,
+                        TimetableSlot.slot_date == attendance_date,
                         TimetableSlot.is_active.is_(True),
                     )
                 )
@@ -239,11 +237,13 @@ class AttendanceService:
         for slot in req.slots:
             if slot.start_time >= slot.end_time:
                 self._raise_error(400, "INVALID_DATE_RANGE", "start_time must be before end_time")
+            
+            # Check for overlapping slots on the same date
             overlap = (
                 await db.execute(
                     select(TimetableSlot).where(
                         TimetableSlot.faculty_credential_id == req.faculty_credential_id,
-                        TimetableSlot.calendar_date == slot.calendar_date,
+                        TimetableSlot.slot_date == slot.slot_date,
                         TimetableSlot.academic_year == req.academic_year,
                         TimetableSlot.is_active.is_(True),
                         TimetableSlot.start_time < slot.end_time,
@@ -252,14 +252,18 @@ class AttendanceService:
                 )
             ).scalars().first()
             if overlap:
-                self._raise_error(409, "INTEGRITY_ERROR", "Overlapping timetable slot exists for this faculty")
+                self._raise_error(409, "INTEGRITY_ERROR", f"Overlapping timetable slot exists for {slot.slot_date}")
+
+            # Calculate day_of_week from slot_date
+            day_of_week = slot.slot_date.strftime("%A").upper()
 
             created = TimetableSlot(
                 institution_id=credential.institution_id,
                 course_id=appointment.course_id,
                 faculty_credential_id=req.faculty_credential_id,
                 academic_year=req.academic_year,
-                calendar_date=slot.calendar_date,
+                slot_date=slot.slot_date,
+                day_of_week=day_of_week,  # Store for reference
                 slot_number=slot.slot_number,
                 start_time=slot.start_time,
                 end_time=slot.end_time,
@@ -282,7 +286,7 @@ class AttendanceService:
                 current_user.id,
                 new_value={
                     "faculty_credential_id": str(slot.faculty_credential_id),
-                    "calendar_date": slot.calendar_date.isoformat(),
+                    "slot_date": str(slot.slot_date),
                     "slot_number": slot.slot_number,
                     "academic_year": slot.academic_year,
                 },
@@ -296,8 +300,8 @@ class AttendanceService:
         current_user: User,
         faculty_credential_id: Optional[UUID],
         academic_year: str,
-    ) -> dict[str, list[dict[str, Any]]]:
-        """Return weekly timetable grouped by day."""
+    ) -> list[dict[str, Any]]:
+        """Return timetable slots for a faculty."""
         resolved_credential_id = faculty_credential_id
         if current_user.role == RoleEnum.FACULTY:
             own_credential, _ = await self._get_faculty_context(db, current_user)
@@ -316,15 +320,16 @@ class AttendanceService:
                 .where(
                     TimetableSlot.faculty_credential_id == resolved_credential_id,
                     TimetableSlot.academic_year == academic_year,
+                    TimetableSlot.is_active.is_(True),
                 )
-                .order_by(TimetableSlot.calendar_date.asc(), TimetableSlot.slot_number.asc())
+                .order_by(
+                    TimetableSlot.slot_date.asc(),
+                    TimetableSlot.start_time.asc()
+                )
             )
         ).scalars().all()
 
-        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
-        for row in rows:
-            grouped[row.calendar_date.isoformat()].append(TimetableSlotResponse.model_validate(row, from_attributes=True).model_dump())
-        return dict(grouped)
+        return [TimetableSlotResponse.model_validate(row, from_attributes=True).model_dump() for row in rows]
 
     async def update_timetable_slot(
         self, db: AsyncSession, current_user: User, slot_id: UUID, req: TimetableSlotUpdateRequest

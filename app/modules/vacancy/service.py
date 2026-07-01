@@ -5,8 +5,7 @@ from uuid import UUID
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, update, delete, func, and_
-from sqlalchemy.orm import selectinload
-
+from sqlalchemy.orm import selectinload, joinedload
 from app.models.existing_faculty import ExistingFaculty
 from app.models.faculty_qualification import FacultyQualification
 from app.models.vacancy_assessment import VacancyAssessment
@@ -14,6 +13,9 @@ from app.models.vacancy_anomaly import VacancyAnomaly
 from app.models.faculty_req import FacultyRequirement
 from app.models.institution import Course
 from app.models.audit import AuditLog
+from app.models.faculty_credentials import FacultyCredentials
+from app.models.candidate import Candidate
+from app.models.appointment_letter import AppointmentLetter
 from app.modules.vacancy.schemas import FacultyCreateRequest, FacultyUpdateRequest, VacancyConfirmRequest
 
 class VacancyService:
@@ -164,17 +166,11 @@ class VacancyService:
         await db.commit()
         return {"status": "success", "message": "Faculty permanently removed from system"}
 
-    async def get_faculty_list(self, db: AsyncSession, institution_id: int, course_id: Optional[int], academic_year: Optional[str], skip: int = 0, limit: Optional[int] = None):
-        conditions = [
+    async def get_faculty_list(self, db: AsyncSession, institution_id: int, course_id: int, academic_year: str, skip: int = 0, limit: Optional[int] = None):
+        base_filter = and_(
             ExistingFaculty.institution_id == institution_id,
             ExistingFaculty.status != "DELETED"
-        ]
-        if course_id is not None:
-            conditions.append(ExistingFaculty.course_id == course_id)
-        if academic_year is not None:
-            conditions.append(ExistingFaculty.academic_year == academic_year)
-            
-        base_filter = and_(*conditions)
+        )
 
         total_stmt = select(func.count()).select_from(ExistingFaculty).where(base_filter)
         total_res = await db.execute(total_stmt)
@@ -186,14 +182,15 @@ class VacancyService:
 
         non_effective = total - effective
 
-        stmt = select(ExistingFaculty).filter(base_filter).options(selectinload(ExistingFaculty.qualifications_list))
+        # Fetch items
+        items_stmt = select(ExistingFaculty).where(base_filter).order_by(ExistingFaculty.created_at.desc())
         if limit is not None:
-            stmt = stmt.offset(skip).limit(limit)
+            items_stmt = items_stmt.offset(skip).limit(limit)
             
-        result = await db.execute(stmt)
-        items = result.scalars().all()
-        
-        return items, total, effective, non_effective
+        items_res = await db.execute(items_stmt)
+        final_items = items_res.scalars().all()
+            
+        return final_items, total, effective, non_effective
 
     async def suggest_vacancy(self, db: AsyncSession, user_id: int, institution_id: int, course_id: int, academic_year: str):
         # 1. Gate: Check Step 1 Approval

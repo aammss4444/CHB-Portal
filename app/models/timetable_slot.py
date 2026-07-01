@@ -21,10 +21,10 @@ class TimetableSlot(Base):
             "institution_id",
             "course_id",
             "faculty_credential_id",
-            "calendar_date",
-            "slot_number",
+            "slot_date",
+            "start_time",
             "academic_year",
-            name="uq_timetable_faculty_slot_date_year",
+            name="uq_timetable_faculty_slot_date_time",
         ),
     )
 
@@ -33,7 +33,8 @@ class TimetableSlot(Base):
     course_id = Column(Integer, ForeignKey("courses.id"), nullable=False)
     faculty_credential_id = Column(UUID(as_uuid=True), ForeignKey("faculty_credentials.id"), nullable=False)
     academic_year = Column(String(20), nullable=False)
-    calendar_date = Column(Date, nullable=False)
+    slot_date = Column(Date, nullable=False)  # Specific date for the slot (REQUIRED)
+    day_of_week = Column(String(10), nullable=True)  # Optional, auto-calculated from slot_date
     slot_number = Column(Integer, nullable=False)
     start_time = Column(Time, nullable=False)
     end_time = Column(Time, nullable=False)

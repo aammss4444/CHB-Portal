@@ -76,6 +76,15 @@ async def update_appointment(
     """Update draft appointment (Principal only)"""
     return await controller.update(db, current_user, appointment_id, req)
 
+@router.delete("/{appointment_id}", dependencies=[Depends(principal_only)])
+async def delete_appointment(
+    appointment_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Permanently delete an appointment letter (Principal only)"""
+    return await controller.delete(db, current_user, appointment_id)
+
 @router.post("/{appointment_id}/submit", dependencies=[Depends(principal_only)])
 async def submit_appointment(
     appointment_id: UUID,

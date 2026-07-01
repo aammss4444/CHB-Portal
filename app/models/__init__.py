@@ -77,7 +77,6 @@ __all__ = [
     "AppointmentAudit",
     "AppointmentAuditAction",
     "TimetableSlot",
-    "WeekDayEnum",
     "TimetableLectureType",
     "LectureLog",
     "LectureLogStatus",

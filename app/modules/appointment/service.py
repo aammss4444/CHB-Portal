@@ -108,17 +108,13 @@ class AppointmentService:
         return f"{prefix}{seq:05d}"
 
     async def _get_templates(self, db: AsyncSession) -> tuple[AppointmentTemplate, AppointmentTemplate]:
-        rows = (
-            await db.execute(
-                select(AppointmentTemplate).where(
-                    and_(AppointmentTemplate.is_active.is_(True), AppointmentTemplate.language.in_(["EN", "MR"]))
-                )
-            )
-        ).scalars().all()
-        tpl_en = next((row for row in rows if row.language == "EN"), None)
-        tpl_mr = next((row for row in rows if row.language == "MR"), None)
-        if not tpl_en or not tpl_mr:
-            self._raise_error(404, "TEMPLATE_NOT_FOUND", "Active EN and MR appointment templates are required")
+        # Use hardcoded templates explicitly as per requirements
+        en_body = "Appointment Number: {{appointment_number}}\nDate: {{issue_date}}\n\nTo,\n{{candidate_name}}\n\nSubject: Appointment as {{designation}}\n\nYou are hereby appointed as {{designation}} at {{institution_name}}, {{course_name}} for academic year {{academic_year}}.\nYour joining date is {{joining_date}} and remuneration is {{salary_per_lecture}} per lecture.\n\nPlease report to the undersigned and complete formalities before joining.\n\nPrincipal\n{{principal_name}}\n"
+        mr_body = "नियुक्ती क्रमांक: {{appointment_number}}\nदिनांक: {{issue_date}}\n\nप्रति,\n{{candidate_name}}\n\nविषय: {{designation}} म्हणून नियुक्ती\n\nआपली {{institution_name}}, {{course_name}} येथे शैक्षणिक वर्ष {{academic_year}} साठी {{designation}} म्हणून नियुक्ती करण्यात येत आहे.\nआपली रुजू होण्याची तारीख {{joining_date}} असून मानधन प्रति व्याख्यान {{salary_per_lecture}} असेल.\n\nकृपया निर्धारित तारखेपूर्वी आवश्यक कागदपत्रांसह हजर राहावे.\n\nप्राचार्य\n{{principal_name}}\n"
+        
+        tpl_en = AppointmentTemplate(language="EN", template_body=en_body, name="HARDCODED_EN")
+        tpl_mr = AppointmentTemplate(language="MR", template_body=mr_body, name="HARDCODED_MR")
+                
         return tpl_en, tpl_mr
 
     async def _get_letter_or_404(self, db: AsyncSession, appointment_id: UUID) -> AppointmentLetter:
@@ -645,6 +641,31 @@ class AppointmentService:
         )
         await db.commit()
         return letter
+
+    async def delete_letter(self, db: AsyncSession, current_user: User, appointment_id: UUID) -> None:
+        if current_user.role != RoleEnum.PRINCIPAL:
+            self._raise_error(403, "HTTP_ERROR", "Only PRINCIPAL can delete appointment letters")
+
+        letter = await self._get_letter_or_404(db, appointment_id)
+        await self._assert_institution_access(letter.institution_id, current_user)
+
+        # Delete audits first to avoid FK constraint violation
+        await db.execute(
+            AppointmentAudit.__table__.delete().where(AppointmentAudit.appointment_letter_id == letter.id)
+        )
+        
+        await db.delete(letter)
+        
+        db.add(
+            AuditLog(
+                entity_name="AppointmentLetter",
+                entity_id=self._entity_id_from_uuid(letter.id),
+                action="DELETED",
+                user_id=current_user.id,
+                old_value={"appointment_number": letter.appointment_number, "status": letter.status},
+            )
+        )
+        await db.commit()
 
     async def trigger_credentials(self, db: AsyncSession, current_user: User, appointment_id: UUID) -> FacultyCredentials:
         letter = await self._get_letter_or_404(db, appointment_id)

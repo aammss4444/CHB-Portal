@@ -121,11 +121,26 @@ class ScoringWeightService:
         if config:
             return config, 5
 
-        self._raise_error(
-            status_code=500,
-            code="WEIGHT_CONFIG_NOT_FOUND",
-            message="No scoring weight config found. Contact Admin."
+        # Fallback to hardcoded DEFAULT config
+        from decimal import Decimal
+        from datetime import date
+        from app.models.user import RoleEnum
+        
+        fallback_config = ScoringWeightConfig(
+            config_name="DEFAULT_FALLBACK",
+            course_id=None,
+            level=None,
+            advertisement_id=None,
+            qualification_weight=Decimal("30.00"),
+            experience_weight=Decimal("25.00"),
+            interview_weight=Decimal("30.00"),
+            publication_weight=Decimal("10.00"),
+            reservation_weight=Decimal("5.00"),
+            set_by_role=RoleEnum.ADMIN.value,
+            effective_from=date(2024, 1, 1),
+            is_active=True
         )
+        return fallback_config, 5
 
     async def create_global_config(
         self,

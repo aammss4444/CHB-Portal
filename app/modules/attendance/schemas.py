@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class TimetableSlotEntryRequest(BaseModel):
-    calendar_date: date
+    slot_date: date  # Specific date for this slot
     slot_number: int = Field(..., ge=1, le=8)
     start_time: time
     end_time: time
@@ -38,7 +38,8 @@ class TimetableSlotResponse(BaseModel):
     course_id: int
     faculty_credential_id: UUID
     academic_year: str
-    calendar_date: date
+    slot_date: date  # Specific date for the slot (REQUIRED)
+    day_of_week: Optional[str] = None  # Auto-calculated from slot_date
     slot_number: int
     start_time: time
     end_time: time
@@ -247,7 +248,7 @@ class LectureLogInput(BaseModel):
 
 
 class TimetableSlotInput(BaseModel):
-    calendar_date: date
+    slot_date: date  # Specific date for the slot
     slot_number: int
     subject_name: str
     class_name: Optional[str] = None

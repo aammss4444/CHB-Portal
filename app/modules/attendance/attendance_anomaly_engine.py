@@ -81,7 +81,7 @@ def run_attendance_anomaly_check(
             slot
             for slot in timetable_slots
             if slot.is_active
-            and slot.calendar_date == lecture_log.lecture_date
+            and slot.slot_date == lecture_log.lecture_date
             and slot.slot_number == lecture_log.slot_number
         ),
         None,
@@ -161,7 +161,7 @@ def run_attendance_anomaly_check(
 
     if lecture_log.lecture_date < lecture_log.created_at.date():
         scheduled_slots = [
-            slot for slot in timetable_slots if slot.is_active and slot.calendar_date == lecture_log.lecture_date
+            slot for slot in timetable_slots if slot.is_active and slot.slot_date == lecture_log.lecture_date
         ]
         if scheduled_slots and len(same_day_logs) == 0:
             anomalies.append(

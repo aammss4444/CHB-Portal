@@ -21,7 +21,7 @@ from app.models.daily_attendance_summary import DailyAttendanceSummary
 from app.models.faculty_credentials import FacultyCredentials
 from app.models.institution import Institution
 from app.models.lecture_log import LectureLog, LectureLogStatus
-from app.models.rate_master import RateMaster
+from app.models.rate_master import RateMaster, CHBDesignation, RateLectureType
 from app.models.user import RoleEnum, User
 from app.modules.billing import bill_calculator
 from app.modules.billing.bill_calculator import BillCalculationError, BillCalculationInput, LectureLogInput
@@ -266,14 +266,33 @@ class BillingService:
     ) -> dict[tuple[str, str], Decimal]:
         if not lecture_types:
             return {}
+        
+        # Convert string designation to enum for comparison
+        try:
+            designation_enum = CHBDesignation[designation]
+        except KeyError:
+            # If designation doesn't match enum, return empty map (will trigger error later)
+            return {}
+        
+        # Convert lecture type strings to enums
+        lecture_type_enums = []
+        for lt in lecture_types:
+            try:
+                lecture_type_enums.append(RateLectureType[lt])
+            except KeyError:
+                pass  # Skip invalid lecture types
+        
+        if not lecture_type_enums:
+            return {}
+        
         rows = (
             await db.execute(
                 select(RateMaster)
                 .where(
                     RateMaster.institution_id == institution_id,
                     RateMaster.academic_year == academic_year,
-                    RateMaster.designation == designation,
-                    RateMaster.lecture_type.in_(list(lecture_types)),
+                    RateMaster.designation == designation_enum,
+                    RateMaster.lecture_type.in_(lecture_type_enums),
                     RateMaster.is_active.is_(True),
                     or_(RateMaster.effective_to.is_(None), RateMaster.effective_to >= date.today()),
                 )

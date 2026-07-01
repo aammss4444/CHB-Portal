@@ -179,27 +179,12 @@ class AdvertisementService:
         content_mr = req.content_mr
 
         if not content_en or not content_mr:
-            templates = (
-                await db.execute(
-                    select(AdvertisementTemplate)
-                    .where(
-                        and_(
-                            AdvertisementTemplate.is_active.is_(True),
-                            AdvertisementTemplate.language.in_(["EN", "MR"]),
-                        )
-                    )
-                    .order_by(AdvertisementTemplate.created_at.desc())
-                )
-            ).scalars().all()
-
-            tpl_en = next((tpl for tpl in templates if tpl.language == "EN"), None)
-            tpl_mr = next((tpl for tpl in templates if tpl.language == "MR"), None)
-            if not tpl_en or not tpl_mr:
-                self._raise_error(
-                    status_code=404,
-                    code="TEMPLATE_NOT_FOUND",
-                    message="Active templates for both EN and MR are required",
-                )
+            # Use hardcoded templates exclusively as per requirements
+            en_body = "Advertisement for CHB faculty positions\nInstitution: {{institution_name}}\nCourse: {{course_name}}\nVacancies: {{vacancy_count}}\nAcademic Year: {{academic_year}}\nDesignation: {{designation}}\nQualification: {{qualification}}\nLast Date to Apply: {{application_deadline}}\n"
+            mr_body = "सीएचबी जाहिरात\nसंस्था: {{institution_name}}\nशाखा: {{course_name}}\nरिक्त पदे: {{vacancy_count}}\nशैक्षणिक वर्ष: {{academic_year}}\nपदनाम: {{designation}}\nपात्रता: {{qualification}}\nअर्जाची अंतिम तारीख: {{application_deadline}}\n"
+            
+            tpl_en = AdvertisementTemplate(language="EN", template_body=en_body, name="HARDCODED_EN")
+            tpl_mr = AdvertisementTemplate(language="MR", template_body=mr_body, name="HARDCODED_MR")
 
             # 5. Render Content
             context = {

@@ -130,19 +130,25 @@ class BillingController:
         # Fetch full bill details including line items
         bill_data = await self.service.get_bill_detail(db, current_user, bill_id)
         
+        # Extract month from period_start
+        period_start = bill_data.get("period_start")
+        month = period_start.month if period_start else None
+        
         # PII Masking: Remove sensitive identifiers (like faculty name, ID, etc. if we just want to validate logic)
         safe_bill_data = {
             "id": str(bill_data["id"]),
             "academic_year": bill_data["academic_year"],
-            "month": bill_data["month"],
-            "total_amount": float(bill_data["total_amount"]),
-            "status": bill_data["status"],
+            "month": month,
+            "period_start": str(period_start) if period_start else None,
+            "period_end": str(bill_data.get("period_end")) if bill_data.get("period_end") else None,
+            "total_amount": float(bill_data["net_amount"]),  # Changed from total_amount to net_amount
+            "status": bill_data["bill_status"],  # Changed from status to bill_status
             "line_items": [
                 {
-                    "lecture_date": item["lecture_date"],
+                    "lecture_date": str(item["lecture_date"]),
                     "lecture_type": item["lecture_type"],
-                    "hours": item["hours"],
-                    "rate_applied": float(item["rate_applied"]),
+                    "hours": item.get("hours", 1),  # Default to 1 if not present
+                    "rate_applied": float(item["rate_per_lecture"]),
                     "amount": float(item["amount"])
                 }
                 for item in bill_data.get("line_items", [])

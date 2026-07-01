@@ -63,6 +63,10 @@ class AppointmentController:
         )
         return {"status": "success", "data": data}
 
+    async def delete(self, db: AsyncSession, current_user: User, appointment_id: UUID):
+        await self.service.delete_letter(db, current_user, appointment_id)
+        return {"status": "success", "message": "Appointment letter deleted successfully"}
+
     async def list_candidate(self, db: AsyncSession, current_user: User):
         data = await self.service.list_candidate_letters(db, current_user)
         return {"status": "success", "data": data}

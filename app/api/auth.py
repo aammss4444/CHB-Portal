@@ -15,7 +15,7 @@ from app.dependencies.pagination import PaginationParams, paginate
 from app.models.user import User, RoleEnum
 from jose import jwt
 
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from app.services.notification_service import send_password_reset_email
 from app.models.audit import AuditLog
 
@@ -24,7 +24,9 @@ admin_only = RoleChecker([RoleEnum.ADMIN])
 
 @router.post("/login", response_model=Token)
 async def login_for_access_token(db: Session = Depends(get_db), form_data: OAuth2PasswordRequestForm = Depends()):
-    result = await db.execute(select(User).filter(User.email == form_data.username))
+    result = await db.execute(select(User).filter(
+        or_(User.email == form_data.username, User.phone_number == form_data.username)
+    ))
     user = result.scalars().first()
     if not user or not verify_password(form_data.password, user.hashed_password):
         raise HTTPException(
